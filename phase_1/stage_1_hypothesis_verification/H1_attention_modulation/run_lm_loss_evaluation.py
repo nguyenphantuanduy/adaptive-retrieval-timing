@@ -84,8 +84,6 @@ def _make_column_name(
     Example:
         2:1 / 0/32
         -> 2:1/0.0000
-
-    The column contains the LM loss for that condition.
     """
 
     decision_score = (
@@ -111,8 +109,8 @@ def _compute_ratio_losses(
     """
     Forward one ratio's 33 retrieval-decision samples.
 
-    The full 33-sample model input stays on CPU. It is moved to
-    GPU in smaller batches to avoid CUDA OOM.
+    The full 33-sample model input stays on CPU.
+    It is moved to GPU in smaller batches to avoid CUDA OOM.
 
     Returns
     -------
@@ -148,7 +146,7 @@ def _compute_ratio_losses(
         )
 
         # ----------------------------------------------------
-        # CPU -> small GPU batch
+        # CPU -> GPU
         # ----------------------------------------------------
 
         batch_input = _slice_model_input(
@@ -195,7 +193,7 @@ def _compute_ratio_losses(
             )
 
         # ----------------------------------------------------
-        # Move only scalar results back to CPU
+        # Move scalar losses back to CPU
         # ----------------------------------------------------
 
         ratio_losses.extend(
@@ -206,7 +204,7 @@ def _compute_ratio_losses(
         )
 
         # ----------------------------------------------------
-        # Explicit cleanup
+        # Cleanup
         # ----------------------------------------------------
 
         del outputs
@@ -219,7 +217,8 @@ def _compute_ratio_losses(
             torch.cuda.empty_cache()
 
     assert (
-        len(ratio_losses) == NUM_DECISION_LEVELS + 1
+        len(ratio_losses)
+        == NUM_DECISION_LEVELS + 1
     )
 
     return ratio_losses
@@ -243,25 +242,16 @@ def run_lm_loss_evaluation(
                 -> document ratio
                     -> retrieval decision 0/32 ... 32/32
 
-    Parameters
-    ----------
-    model:
-        ART/Qwen model already loaded on GPU.
+    Each CSV row stores:
 
-    tokenizer:
-        Tokenizer corresponding to the model.
+        sample_id
+        sample_index
+        LM loss for every ratio / retrieval decision
 
-    batch_size:
-        GPU forward batch size.
-        Defaults to BATCH_SIZE.
-
-    output_dir:
-        Directory where the three CSV files are written.
-
-    Returns
-    -------
-    dict
-        Results grouped by hop.
+    Notes
+    -----
+    Terminal output is intentionally kept compact so that
+    large-scale evaluation does not flood the terminal.
     """
 
     if batch_size < 1:
@@ -270,6 +260,7 @@ def run_lm_loss_evaluation(
         )
 
     output_dir = Path(output_dir)
+
     output_dir.mkdir(
         parents=True,
         exist_ok=True,
@@ -290,54 +281,95 @@ def run_lm_loss_evaluation(
     model.eval()
 
     # ========================================================
-    # LOAD DATASET
+    # HEADER
     # ========================================================
 
-    print("=" * 100)
-    print("LM LOSS EVALUATION")
-    print("=" * 100)
-
     print()
+    print("=" * 100)
+    print("ART — LM LOSS EVALUATION")
+    print("=" * 100)
+
     print(
-        f"Device      : {device}"
+        f"Device          : {device}"
     )
 
     print(
-        f"Batch size  : {batch_size}"
+        f"Batch size      : {batch_size}"
     )
 
     print(
-        f"Decision levels: "
+        f"Decision levels : "
         f"0/{NUM_DECISION_LEVELS} ... "
         f"{NUM_DECISION_LEVELS}/{NUM_DECISION_LEVELS}"
     )
 
     print(
-        f"Output dir  : {output_dir}"
+        f"Output directory: {output_dir}"
     )
 
     print()
+
+    # ========================================================
+    # LOAD DATASET
+    # ========================================================
+
+    print(
+        "Loading validation dataset...",
+        flush=True,
+    )
 
     datasets = (
         load_teacher_generated_hypothesis_validation()
     )
 
     # ========================================================
+    # DATASET SUMMARY
+    # ========================================================
+
+    print()
+    print("Dataset:")
+    
+    total_samples = 0
+
+    for hop, samples in datasets.items():
+
+        print(
+            f"  {hop:<8}: "
+            f"{len(samples):,} samples"
+        )
+
+        total_samples += len(samples)
+
+    print(
+        f"  {'TOTAL':<8}: "
+        f"{total_samples:,} samples"
+    )
+
+    # ========================================================
     # GLOBAL CSV SCHEMA
     # ========================================================
     #
-    # 2-hop may not contain (3, 0), while 3-hop / 4-hop may.
-    #
-    # We therefore use the union of all ratios so every CSV has
-    # the same flattened column structure.
+    # Collect the union of all ratios appearing anywhere in
+    # the validation set.
     #
     # ========================================================
+
+    print()
+    print(
+        "Building global CSV schema...",
+        flush=True,
+    )
 
     all_ratios = []
 
     for samples in datasets.values():
 
         for sample in samples:
+
+            assert "id" in sample, (
+                "Every sample must contain "
+                "an 'id' field."
+            )
 
             sample_ratios = (
                 create_lm_loss_samples(
@@ -348,12 +380,13 @@ def run_lm_loss_evaluation(
             for ratio in sample_ratios:
 
                 if ratio not in all_ratios:
+
                     all_ratios.append(
                         ratio
                     )
 
     # --------------------------------------------------------
-    # Deterministic ratio ordering
+    # Deterministic ordering
     # --------------------------------------------------------
 
     all_ratios = sorted(
@@ -384,8 +417,8 @@ def run_lm_loss_evaluation(
     )
 
     print(
-        f"CSV loss columns: "
-        f"{len(all_columns)}"
+        f"LM-loss columns: "
+        f"{len(all_columns):,}"
     )
 
     # ========================================================
@@ -393,6 +426,12 @@ def run_lm_loss_evaluation(
     # ========================================================
 
     all_hop_results = {}
+
+    # ========================================================
+    # GLOBAL PROGRESS
+    # ========================================================
+
+    processed_samples = 0
 
     # ========================================================
     # LOOP OVER HOPS
@@ -418,26 +457,33 @@ def run_lm_loss_evaluation(
             samples
         ):
 
-            print()
-            print(
-                "-" * 100
+            # ------------------------------------------------
+            # Sample identification
+            # ------------------------------------------------
+
+            assert "id" in sample, (
+                f"{hop} sample {sample_index} "
+                "does not contain an 'id' field."
             )
+
+            sample_id = sample["id"]
+
+            # ------------------------------------------------
+            # Compact progress line
+            # ------------------------------------------------
+
             print(
-                f"{hop} — "
-                f"Sample "
-                f"{sample_index + 1:,}/"
-                f"{len(samples):,}"
-            )
-            print(
-                f"Question: "
-                f"{sample['question']}"
-            )
-            print(
-                "-" * 100
+                f"[{processed_samples + 1:,}/"
+                f"{total_samples:,}] "
+                f"{hop} | "
+                f"sample {sample_index + 1:,}/"
+                f"{len(samples):,} | "
+                f"id={sample_id}",
+                flush=True,
             )
 
             # ------------------------------------------------
-            # Create LM-loss samples for all ratios
+            # Create LM-loss samples
             # ------------------------------------------------
 
             lm_loss_samples = (
@@ -447,7 +493,7 @@ def run_lm_loss_evaluation(
             )
 
             # ------------------------------------------------
-            # One flat row for this sample
+            # One CSV row
             # ------------------------------------------------
 
             row = {
@@ -455,25 +501,22 @@ def run_lm_loss_evaluation(
                 for column in all_columns
             }
 
+            row["sample_id"] = sample_id
+
             row["sample_index"] = (
                 sample_index
             )
 
-            # ------------------------------------------------
-            # Process every ratio
-            # ------------------------------------------------
+            # =================================================
+            # PROCESS EVERY RATIO
+            # =================================================
 
             for ratio, lm_sample in (
                 lm_loss_samples.items()
             ):
 
-                print(
-                    f"  Ratio "
-                    f"{ratio[0]}:{ratio[1]}"
-                )
-
                 # --------------------------------------------
-                # Create 33 retrieval-decision inputs
+                # Create 33 decision-level inputs
                 # --------------------------------------------
 
                 model_input = (
@@ -500,13 +543,13 @@ def run_lm_loss_evaluation(
                     f"{hop} sample "
                     f"{sample_index}: "
                     f"ratio {ratio} produced "
-                    f"{num_decisions} decision "
-                    f"levels instead of "
+                    f"{num_decisions} decision levels "
+                    f"instead of "
                     f"{NUM_DECISION_LEVELS + 1}"
                 )
 
                 # --------------------------------------------
-                # Forward 33 levels in small GPU batches
+                # Forward 33 levels
                 # --------------------------------------------
 
                 ratio_losses = (
@@ -519,7 +562,7 @@ def run_lm_loss_evaluation(
                 )
 
                 # --------------------------------------------
-                # Flatten into CSV columns
+                # Store losses
                 # --------------------------------------------
 
                 for decision_level, loss in enumerate(
@@ -534,7 +577,7 @@ def run_lm_loss_evaluation(
                     row[column] = loss
 
                 # --------------------------------------------
-                # Free ratio input
+                # Cleanup ratio
                 # --------------------------------------------
 
                 del model_input
@@ -543,24 +586,25 @@ def run_lm_loss_evaluation(
                 gc.collect()
 
                 if torch.cuda.is_available():
+
                     torch.cuda.empty_cache()
+
                     torch.cuda.ipc_collect()
 
-            # ------------------------------------------------
-            # Store sample row
-            # ------------------------------------------------
+            # =================================================
+            # STORE ROW
+            # =================================================
 
             hop_results.append(
                 row
             )
 
-            # ------------------------------------------------
-            # Progress
-            # ------------------------------------------------
+            processed_samples += 1
 
             print(
-                f"  ✓ Sample "
-                f"{sample_index + 1:,} complete"
+                f"    ✓ complete | "
+                f"id={sample_id}",
+                flush=True,
             )
 
         # ====================================================
@@ -568,12 +612,14 @@ def run_lm_loss_evaluation(
         # ====================================================
 
         fieldnames = [
-            "sample_index"
+            "sample_id",
+            "sample_index",
         ] + all_columns
 
         output_path = (
             output_dir
-            / f"lm_loss_{hop.replace('-', '_')}.csv"
+            / f"lm_loss_"
+            f"{hop.replace('-', '_')}.csv"
         )
 
         with output_path.open(
@@ -597,10 +643,21 @@ def run_lm_loss_evaluation(
             hop_results
         )
 
+        # ====================================================
+        # HOP SUMMARY
+        # ====================================================
+
         print()
         print(
-            f"✓ Saved: "
-            f"{output_path}"
+            f"✓ {hop.upper()} COMPLETE"
+        )
+
+        print(
+            f"  Samples : {len(hop_results):,}"
+        )
+
+        print(
+            f"  Saved   : {output_path}"
         )
 
     # ========================================================
@@ -612,44 +669,37 @@ def run_lm_loss_evaluation(
     print("LM LOSS EVALUATION COMPLETE")
     print("=" * 100)
 
+    print(
+        f"Total samples processed: "
+        f"{processed_samples:,}"
+    )
+
+    print()
+
     for hop in datasets:
 
         output_path = (
             output_dir
-            / f"lm_loss_{hop.replace('-', '_')}.csv"
+            / f"lm_loss_"
+            f"{hop.replace('-', '_')}.csv"
         )
 
         print(
-            f"{hop:<8} → "
-            f"{output_path}"
+            f"{hop:<8} → {output_path}"
         )
+
+    print()
+    print("=" * 100)
 
     return all_hop_results
 
 
 # ============================================================
-# OPTIONAL MAIN
-# ============================================================
-#
-# The function expects `model` and `tokenizer` to already exist.
-#
-# If this file is imported from a notebook:
-#
-#     from run_lm_loss_evaluation import (
-#         run_lm_loss_evaluation,
-#     )
-#
-#     results = run_lm_loss_evaluation(
-#         model=probe,
-#         tokenizer=tokenizer,
-#         batch_size=8,
-#     )
-#
+# MAIN
 # ============================================================
 
 if __name__ == "__main__":
 
-    import torch
     from transformers import (
         AutoModelForCausalLM,
         AutoTokenizer,
@@ -667,7 +717,7 @@ if __name__ == "__main__":
     )
 
     # ========================================================
-    # LOAD TOKENIZER
+    # TOKENIZER
     # ========================================================
 
     print("=" * 80)
@@ -678,11 +728,12 @@ if __name__ == "__main__":
         MODEL_NAME,
     )
 
-    print()
-    print(f"Tokenizer  : {MODEL_NAME}")
+    print(
+        f"Tokenizer: {MODEL_NAME}"
+    )
 
     # ========================================================
-    # LOAD MODEL — SINGLE GPU
+    # MODEL
     # ========================================================
 
     print()
@@ -703,7 +754,7 @@ if __name__ == "__main__":
     )
 
     # ========================================================
-    # CHECK
+    # MODEL CHECK
     # ========================================================
 
     print()
@@ -711,15 +762,17 @@ if __name__ == "__main__":
     print("MODEL LOADED")
     print("=" * 80)
 
-    print()
-    print(f"Model           : {HF_REPO}")
     print(
-        f"Parameter device : "
+        f"Model           : {HF_REPO}"
+    )
+
+    print(
+        f"Parameter device: "
         f"{next(probe.parameters()).device}"
     )
 
     # ========================================================
-    # RUN LM-LOSS EVALUATION
+    # RUN
     # ========================================================
 
     print()
@@ -744,6 +797,7 @@ if __name__ == "__main__":
     print("=" * 80)
 
     for hop in results:
+
         print(
             f"{hop:<8} → "
             f"{OUTPUT_DIR / f'lm_loss_{hop.replace('-', '_')}.csv'}"
