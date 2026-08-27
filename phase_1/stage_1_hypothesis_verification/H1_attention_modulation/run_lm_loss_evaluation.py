@@ -1,3 +1,4 @@
+import argparse
 import csv
 import gc
 from pathlib import Path
@@ -27,6 +28,14 @@ from shared.utils.compute_per_sample_lm_loss import (
 # ============================================================
 
 # Batch size is selected by hop.
+#
+# This is the batch size used for the 33 retrieval-decision
+# levels of ONE ratio.
+#
+# 2-hop -> 4
+# 3-hop -> 1
+# 4-hop -> 1
+#
 BATCH_SIZE_BY_HOP = {
     "2-hop": 4,
     "3-hop": 1,
@@ -34,6 +43,9 @@ BATCH_SIZE_BY_HOP = {
 }
 
 NUM_DECISION_LEVELS = 32
+
+# Save CSV every N completed samples.
+SAVE_EVERY = 100
 
 OUTPUT_DIR = Path(
     "phase_1/stage_1_hypothesis_verification/"
@@ -122,6 +134,42 @@ def _get_batch_size_for_hop(
     return BATCH_SIZE_BY_HOP[hop]
 
 
+def _parse_mode(
+    mode: str,
+) -> list[str]:
+    """
+    Convert CLI mode into the list of hops to evaluate.
+
+    Supported:
+
+        --mode 2
+        --mode 3
+        --mode 4
+        --mode full
+    """
+
+    if mode == "2":
+        return ["2-hop"]
+
+    if mode == "3":
+        return ["3-hop"]
+
+    if mode == "4":
+        return ["4-hop"]
+
+    if mode == "full":
+        return [
+            "2-hop",
+            "3-hop",
+            "4-hop",
+        ]
+
+    raise ValueError(
+        f"Invalid mode '{mode}'. "
+        "Expected: 2, 3, 4, or full."
+    )
+
+
 # ============================================================
 # EVALUATE ONE LM-LOSS SAMPLE
 # ============================================================
@@ -136,6 +184,7 @@ def _compute_ratio_losses(
     Forward one ratio's 33 retrieval-decision samples.
 
     The full 33-sample model input stays on CPU.
+
     It is moved to GPU in smaller batches to avoid CUDA OOM.
 
     Parameters
@@ -254,7 +303,6 @@ def _compute_ratio_losses(
         gc.collect()
 
         if torch.cuda.is_available():
-
             torch.cuda.empty_cache()
 
     # ========================================================
@@ -274,14 +322,301 @@ def _compute_ratio_losses(
 
 
 # ============================================================
+# CREATE GLOBAL CSV SCHEMA
+# ============================================================
+
+def _build_global_schema(
+    datasets: dict[str, list[dict[str, Any]]],
+) -> list[tuple[int, int]]:
+    """
+    Collect the union of all ratios appearing in the
+    selected validation datasets.
+    """
+
+    print()
+    print(
+        "Building global CSV schema...",
+        flush=True,
+    )
+
+    all_ratios: list[tuple[int, int]] = []
+
+    for samples in datasets.values():
+
+        for sample in samples:
+
+            assert "id" in sample, (
+                "Every sample must contain "
+                "an 'id' field."
+            )
+
+            sample_ratios = (
+                create_lm_loss_samples(
+                    sample
+                ).keys()
+            )
+
+            for ratio in sample_ratios:
+
+                if ratio not in all_ratios:
+                    all_ratios.append(
+                        ratio
+                    )
+
+    # --------------------------------------------------------
+    # Deterministic ordering
+    # --------------------------------------------------------
+
+    all_ratios = sorted(
+        all_ratios,
+        key=lambda x: (
+            -x[0],
+            x[1],
+        ),
+    )
+
+    return all_ratios
+
+
+# ============================================================
+# CREATE CSV HEADER
+# ============================================================
+
+def _build_fieldnames(
+    all_ratios: list[tuple[int, int]],
+) -> list[str]:
+    """
+    Build the complete CSV schema.
+    """
+
+    all_columns = [
+        _make_column_name(
+            ratio,
+            decision_level,
+        )
+        for ratio in all_ratios
+        for decision_level in range(
+            NUM_DECISION_LEVELS + 1
+        )
+    ]
+
+    return [
+        "sample_id",
+        "sample_index",
+    ] + all_columns
+
+
+# ============================================================
+# CREATE ONE CSV ROW
+# ============================================================
+
+def _evaluate_one_sample(
+    model,
+    tokenizer,
+    sample: dict[str, Any],
+    sample_index: int,
+    hop: str,
+    all_columns: list[str],
+    device: torch.device,
+    batch_size: int,
+) -> dict[str, Any]:
+    """
+    Evaluate one dataset sample across:
+
+        ratio
+            -> 33 retrieval decision levels
+    """
+
+    assert "id" in sample, (
+        f"{hop} sample {sample_index} "
+        "does not contain an 'id' field."
+    )
+
+    sample_id = sample["id"]
+
+    # --------------------------------------------------------
+    # Create LM-loss samples
+    # --------------------------------------------------------
+
+    lm_loss_samples = (
+        create_lm_loss_samples(
+            sample
+        )
+    )
+
+    # --------------------------------------------------------
+    # Initialize one CSV row
+    # --------------------------------------------------------
+
+    row = {
+        column: ""
+        for column in all_columns
+    }
+
+    row["sample_id"] = sample_id
+    row["sample_index"] = sample_index
+
+    # ========================================================
+    # PROCESS EVERY RATIO
+    # ========================================================
+
+    for ratio, lm_sample in (
+        lm_loss_samples.items()
+    ):
+
+        # ----------------------------------------------------
+        # Create 33 decision-level inputs
+        # ----------------------------------------------------
+
+        model_input = (
+            create_model_input_for_lm_loss(
+                lm_sample,
+                tokenizer,
+            )
+        )
+
+        # ----------------------------------------------------
+        # Sanity check
+        # ----------------------------------------------------
+
+        num_decisions = (
+            model_input[
+                "input_ids"
+            ].shape[0]
+        )
+
+        assert (
+            num_decisions
+            == NUM_DECISION_LEVELS + 1
+        ), (
+            f"{hop} sample "
+            f"{sample_index}: "
+            f"ratio {ratio} produced "
+            f"{num_decisions} decision levels "
+            f"instead of "
+            f"{NUM_DECISION_LEVELS + 1}"
+        )
+
+        # ----------------------------------------------------
+        # Forward 33 decision levels
+        # ----------------------------------------------------
+
+        ratio_losses = (
+            _compute_ratio_losses(
+                model=model,
+                model_input=model_input,
+                device=device,
+                batch_size=batch_size,
+            )
+        )
+
+        # ----------------------------------------------------
+        # Store losses
+        # ----------------------------------------------------
+
+        for decision_level, loss in enumerate(
+            ratio_losses
+        ):
+
+            column = _make_column_name(
+                ratio,
+                decision_level,
+            )
+
+            row[column] = loss
+
+        # ----------------------------------------------------
+        # Cleanup ratio
+        # ----------------------------------------------------
+
+        del model_input
+        del lm_sample
+
+        gc.collect()
+
+        if torch.cuda.is_available():
+
+            torch.cuda.empty_cache()
+            torch.cuda.ipc_collect()
+
+    del lm_loss_samples
+
+    return row
+
+
+# ============================================================
+# SAVE CSV CHUNK
+# ============================================================
+
+def _append_rows_to_csv(
+    output_path: Path,
+    fieldnames: list[str],
+    rows: list[dict[str, Any]],
+) -> None:
+    """
+    Append a chunk of rows to CSV.
+
+    The file is assumed to already have its header.
+    """
+
+    if not rows:
+        return
+
+    with output_path.open(
+        "a",
+        newline="",
+        encoding="utf-8",
+    ) as f:
+
+        writer = csv.DictWriter(
+            f,
+            fieldnames=fieldnames,
+        )
+
+        writer.writerows(rows)
+
+        f.flush()
+
+
+# ============================================================
+# INITIALIZE CSV
+# ============================================================
+
+def _initialize_csv(
+    output_path: Path,
+    fieldnames: list[str],
+) -> None:
+    """
+    Create / overwrite a CSV and write its header.
+
+    This intentionally starts a fresh evaluation for the
+    selected mode.
+    """
+
+    with output_path.open(
+        "w",
+        newline="",
+        encoding="utf-8",
+    ) as f:
+
+        writer = csv.DictWriter(
+            f,
+            fieldnames=fieldnames,
+        )
+
+        writer.writeheader()
+
+
+# ============================================================
 # MAIN EVALUATION FUNCTION
 # ============================================================
 
 def run_lm_loss_evaluation(
     model,
     tokenizer,
+    mode: str = "full",
     output_dir: str | Path = OUTPUT_DIR,
-) -> dict[str, list[dict[str, Any]]]:
+) -> dict[str, Path]:
     """
     Compute per-sample LM loss across:
 
@@ -290,22 +625,35 @@ def run_lm_loss_evaluation(
                 -> document ratio
                     -> retrieval decision 0/32 ... 32/32
 
-    Each CSV row stores:
+    Modes
+    -----
 
-        sample_id
-        sample_index
-        LM loss for every ratio / retrieval decision
+        mode="2"
+            Run only 2-hop.
 
-    Batch size is selected automatically by hop:
+        mode="3"
+            Run only 3-hop.
+
+        mode="4"
+            Run only 4-hop.
+
+        mode="full"
+            Run 2-hop, 3-hop, and 4-hop.
+
+    Batch sizes
+    -----------
 
         2-hop -> 4
         3-hop -> 1
         4-hop -> 1
 
-    Notes
-    -----
-    Terminal output is intentionally compact for large-scale
-    evaluation.
+    Checkpointing
+    -------------
+
+    Results are written every SAVE_EVERY samples.
+
+    This means that the entire validation set is NOT kept
+    in RAM before writing the CSV.
     """
 
     output_dir = Path(output_dir)
@@ -313,6 +661,14 @@ def run_lm_loss_evaluation(
     output_dir.mkdir(
         parents=True,
         exist_ok=True,
+    )
+
+    # ========================================================
+    # SELECT HOPS
+    # ========================================================
+
+    selected_hops = _parse_mode(
+        mode
     )
 
     # ========================================================
@@ -339,24 +695,38 @@ def run_lm_loss_evaluation(
     print("=" * 100)
 
     print(
+        f"Mode            : {mode}"
+    )
+
+    print(
         f"Device          : {device}"
+    )
+
+    print(
+        "Selected hops    : "
+        + ", ".join(selected_hops)
     )
 
     print(
         "Batch size by hop:"
     )
 
-    for hop, batch_size in BATCH_SIZE_BY_HOP.items():
+    for hop in selected_hops:
 
         print(
             f"  {hop:<8}: "
-            f"{batch_size}"
+            f"{_get_batch_size_for_hop(hop)}"
         )
 
     print(
         f"Decision levels : "
         f"0/{NUM_DECISION_LEVELS} ... "
         f"{NUM_DECISION_LEVELS}/{NUM_DECISION_LEVELS}"
+    )
+
+    print(
+        f"Save every      : "
+        f"{SAVE_EVERY} samples"
     )
 
     print(
@@ -375,9 +745,29 @@ def run_lm_loss_evaluation(
         flush=True,
     )
 
-    datasets = (
+    all_datasets = (
         load_teacher_generated_hypothesis_validation()
     )
+
+    # ========================================================
+    # SELECT DATASETS
+    # ========================================================
+
+    datasets = {}
+
+    for hop in selected_hops:
+
+        if hop not in all_datasets:
+            raise ValueError(
+                f"Dataset does not contain '{hop}'. "
+                f"Available hops: "
+                f"{list(all_datasets.keys())}"
+            )
+
+        datasets[hop] = all_datasets[hop]
+
+    # Free reference to the unselected datasets.
+    del all_datasets
 
     # ========================================================
     # DATASET SUMMARY
@@ -410,62 +800,10 @@ def run_lm_loss_evaluation(
     # ========================================================
     # GLOBAL CSV SCHEMA
     # ========================================================
-    #
-    # Collect the union of all ratios appearing anywhere in
-    # the validation set.
-    #
-    # ========================================================
 
-    print()
-    print(
-        "Building global CSV schema...",
-        flush=True,
+    all_ratios = _build_global_schema(
+        datasets
     )
-
-    all_ratios = []
-
-    for samples in datasets.values():
-
-        for sample in samples:
-
-            # ------------------------------------------------
-            # Verify sample ID
-            # ------------------------------------------------
-
-            assert "id" in sample, (
-                "Every sample must contain "
-                "an 'id' field."
-            )
-
-            sample_ratios = (
-                create_lm_loss_samples(
-                    sample
-                ).keys()
-            )
-
-            for ratio in sample_ratios:
-
-                if ratio not in all_ratios:
-
-                    all_ratios.append(
-                        ratio
-                    )
-
-    # --------------------------------------------------------
-    # Deterministic ratio ordering
-    # --------------------------------------------------------
-
-    all_ratios = sorted(
-        all_ratios,
-        key=lambda x: (
-            -x[0],
-            x[1],
-        ),
-    )
-
-    # --------------------------------------------------------
-    # CSV loss columns
-    # --------------------------------------------------------
 
     all_columns = [
         _make_column_name(
@@ -477,6 +815,11 @@ def run_lm_loss_evaluation(
             NUM_DECISION_LEVELS + 1
         )
     ]
+
+    fieldnames = [
+        "sample_id",
+        "sample_index",
+    ] + all_columns
 
     print(
         "Ratios:",
@@ -492,10 +835,20 @@ def run_lm_loss_evaluation(
     )
 
     # ========================================================
-    # STORE RESULTS
+    # OUTPUT PATHS
     # ========================================================
 
-    all_hop_results = {}
+    output_paths: dict[str, Path] = {}
+
+    for hop in selected_hops:
+
+        output_path = (
+            output_dir
+            / f"lm_loss_"
+            f"{hop.replace('-', '_')}.csv"
+        )
+
+        output_paths[hop] = output_path
 
     # ========================================================
     # GLOBAL PROGRESS
@@ -510,11 +863,24 @@ def run_lm_loss_evaluation(
     for hop, samples in datasets.items():
 
         # ----------------------------------------------------
-        # Select batch size for this hop
+        # Batch size
         # ----------------------------------------------------
 
         batch_size = _get_batch_size_for_hop(
             hop
+        )
+
+        output_path = output_paths[hop]
+
+        # ----------------------------------------------------
+        # Initialize CSV
+        #
+        # This overwrites the previous file for this hop.
+        # ----------------------------------------------------
+
+        _initialize_csv(
+            output_path,
+            fieldnames,
         )
 
         print()
@@ -526,7 +892,17 @@ def run_lm_loss_evaluation(
         )
         print("=" * 100)
 
-        hop_results = []
+        print(
+            f"Output: {output_path}"
+        )
+
+        print()
+
+        # ----------------------------------------------------
+        # Chunk buffer
+        # ----------------------------------------------------
+
+        rows_buffer: list[dict[str, Any]] = []
 
         # ====================================================
         # LOOP OVER SAMPLES
@@ -548,7 +924,7 @@ def run_lm_loss_evaluation(
             sample_id = sample["id"]
 
             # ------------------------------------------------
-            # Compact progress
+            # Progress
             # ------------------------------------------------
 
             print(
@@ -563,137 +939,29 @@ def run_lm_loss_evaluation(
             )
 
             # ------------------------------------------------
-            # Create LM-loss samples
+            # Evaluate sample
             # ------------------------------------------------
 
-            lm_loss_samples = (
-                create_lm_loss_samples(
-                    sample
-                )
+            row = _evaluate_one_sample(
+                model=model,
+                tokenizer=tokenizer,
+                sample=sample,
+                sample_index=sample_index,
+                hop=hop,
+                all_columns=all_columns,
+                device=device,
+                batch_size=batch_size,
             )
 
             # ------------------------------------------------
-            # One CSV row
+            # Add to checkpoint buffer
             # ------------------------------------------------
 
-            row = {
-                column: ""
-                for column in all_columns
-            }
-
-            # ------------------------------------------------
-            # Sample identification
-            # ------------------------------------------------
-
-            row["sample_id"] = sample_id
-
-            row["sample_index"] = (
-                sample_index
-            )
-
-            # =================================================
-            # PROCESS EVERY RATIO
-            # =================================================
-
-            for ratio, lm_sample in (
-                lm_loss_samples.items()
-            ):
-
-                # --------------------------------------------
-                # Create 33 decision-level inputs
-                # --------------------------------------------
-
-                model_input = (
-                    create_model_input_for_lm_loss(
-                        lm_sample,
-                        tokenizer,
-                    )
-                )
-
-                # --------------------------------------------
-                # Sanity check
-                # --------------------------------------------
-
-                num_decisions = (
-                    model_input[
-                        "input_ids"
-                    ].shape[0]
-                )
-
-                assert (
-                    num_decisions
-                    == NUM_DECISION_LEVELS + 1
-                ), (
-                    f"{hop} sample "
-                    f"{sample_index}: "
-                    f"ratio {ratio} produced "
-                    f"{num_decisions} decision levels "
-                    f"instead of "
-                    f"{NUM_DECISION_LEVELS + 1}"
-                )
-
-                # --------------------------------------------
-                # Forward all 33 decision levels
-                #
-                # Batch size depends on hop:
-                #
-                # 2-hop -> 4
-                # 3-hop -> 1
-                # 4-hop -> 1
-                # --------------------------------------------
-
-                ratio_losses = (
-                    _compute_ratio_losses(
-                        model=model,
-                        model_input=model_input,
-                        device=device,
-                        batch_size=batch_size,
-                    )
-                )
-
-                # --------------------------------------------
-                # Store losses
-                # --------------------------------------------
-
-                for decision_level, loss in enumerate(
-                    ratio_losses
-                ):
-
-                    column = _make_column_name(
-                        ratio,
-                        decision_level,
-                    )
-
-                    row[column] = loss
-
-                # --------------------------------------------
-                # Cleanup ratio
-                # --------------------------------------------
-
-                del model_input
-                del lm_sample
-
-                gc.collect()
-
-                if torch.cuda.is_available():
-
-                    torch.cuda.empty_cache()
-
-                    torch.cuda.ipc_collect()
-
-            # =================================================
-            # STORE ROW
-            # =================================================
-
-            hop_results.append(
+            rows_buffer.append(
                 row
             )
 
             processed_samples += 1
-
-            # ------------------------------------------------
-            # Completion progress
-            # ------------------------------------------------
 
             print(
                 f"    ✓ complete | "
@@ -701,41 +969,56 @@ def run_lm_loss_evaluation(
                 flush=True,
             )
 
+            # =================================================
+            # CHECKPOINT EVERY 100 SAMPLES
+            # =================================================
+
+            if (
+                len(rows_buffer)
+                >= SAVE_EVERY
+            ):
+
+                _append_rows_to_csv(
+                    output_path=output_path,
+                    fieldnames=fieldnames,
+                    rows=rows_buffer,
+                )
+
+                print(
+                    f"    💾 checkpoint saved | "
+                    f"{len(rows_buffer)} samples | "
+                    f"total processed={processed_samples:,}",
+                    flush=True,
+                )
+
+                rows_buffer.clear()
+
+                gc.collect()
+
+                if torch.cuda.is_available():
+
+                    torch.cuda.empty_cache()
+                    torch.cuda.ipc_collect()
+
         # ====================================================
-        # SAVE HOP CSV
+        # SAVE REMAINING SAMPLES
         # ====================================================
 
-        fieldnames = [
-            "sample_id",
-            "sample_index",
-        ] + all_columns
+        if rows_buffer:
 
-        output_path = (
-            output_dir
-            / f"lm_loss_"
-            f"{hop.replace('-', '_')}.csv"
-        )
-
-        with output_path.open(
-            "w",
-            newline="",
-            encoding="utf-8",
-        ) as f:
-
-            writer = csv.DictWriter(
-                f,
+            _append_rows_to_csv(
+                output_path=output_path,
                 fieldnames=fieldnames,
+                rows=rows_buffer,
             )
 
-            writer.writeheader()
-
-            writer.writerows(
-                hop_results
+            print(
+                f"    💾 final checkpoint saved | "
+                f"{len(rows_buffer)} samples",
+                flush=True,
             )
 
-        all_hop_results[hop] = (
-            hop_results
-        )
+            rows_buffer.clear()
 
         # ====================================================
         # HOP SUMMARY
@@ -748,7 +1031,7 @@ def run_lm_loss_evaluation(
 
         print(
             f"  Samples    : "
-            f"{len(hop_results):,}"
+            f"{len(samples):,}"
         )
 
         print(
@@ -777,23 +1060,51 @@ def run_lm_loss_evaluation(
 
     print()
 
-    for hop in datasets:
-
-        output_path = (
-            output_dir
-            / f"lm_loss_"
-            f"{hop.replace('-', '_')}.csv"
-        )
+    for hop in selected_hops:
 
         print(
             f"{hop:<8} → "
-            f"{output_path}"
+            f"{output_paths[hop]}"
         )
 
     print()
     print("=" * 100)
 
-    return all_hop_results
+    return output_paths
+
+
+# ============================================================
+# CLI
+# ============================================================
+
+def parse_args() -> argparse.Namespace:
+
+    parser = argparse.ArgumentParser(
+        description=(
+            "ART H1 LM-loss evaluation"
+        )
+    )
+
+    parser.add_argument(
+        "--mode",
+        type=str,
+        required=True,
+        choices=[
+            "2",
+            "3",
+            "4",
+            "full",
+        ],
+        help=(
+            "Evaluation mode: "
+            "2 = 2-hop, "
+            "3 = 3-hop, "
+            "4 = 4-hop, "
+            "full = all hops."
+        ),
+    )
+
+    return parser.parse_args()
 
 
 # ============================================================
@@ -801,6 +1112,8 @@ def run_lm_loss_evaluation(
 # ============================================================
 
 if __name__ == "__main__":
+
+    args = parse_args()
 
     from transformers import (
         AutoModelForCausalLM,
@@ -879,12 +1192,16 @@ if __name__ == "__main__":
 
     print()
     print("=" * 80)
-    print("STARTING LM-LOSS EVALUATION")
+    print(
+        f"STARTING LM-LOSS EVALUATION "
+        f"(MODE = {args.mode})"
+    )
     print("=" * 80)
 
     results = run_lm_loss_evaluation(
         model=probe,
         tokenizer=tokenizer,
+        mode=args.mode,
         output_dir=OUTPUT_DIR,
     )
 
@@ -897,9 +1214,8 @@ if __name__ == "__main__":
     print("ALL DONE")
     print("=" * 80)
 
-    for hop in results:
+    for hop, output_path in results.items():
 
         print(
-            f"{hop:<8} → "
-            f"{OUTPUT_DIR / f'lm_loss_{hop.replace('-', '_')}.csv'}"
+            f"{hop:<8} → {output_path}"
         )
