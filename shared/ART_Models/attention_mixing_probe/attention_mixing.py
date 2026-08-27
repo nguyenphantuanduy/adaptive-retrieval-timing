@@ -18,8 +18,10 @@ from transformers.models.qwen3.modeling_qwen3 import (
 
 def attention_mixing_forward(
     module: nn.Module,
-    query: torch.Tensor,
-    key: torch.Tensor,
+    query_with_doc: torch.Tensor,
+    key_with_doc: torch.Tensor,
+    query_without_doc: torch.Tensor,
+    key_without_doc: torch.Tensor,
     value: torch.Tensor,
     attention_mask: Optional[torch.Tensor],
     scaling: float,
@@ -28,39 +30,138 @@ def attention_mixing_forward(
     retrieval_decision: torch.Tensor | None = None,
     **kwargs: Unpack[TransformersKwargs],
 ):
-    key_states = repeat_kv(key, module.num_key_value_groups)
-    value_states = repeat_kv(value, module.num_key_value_groups)
+    # ========================================================
+    # REPEAT KV
+    # ========================================================
 
-    attn_scores = torch.matmul(
-        query,
-        key_states.transpose(2, 3),
+    key_states_with_doc = repeat_kv(
+        key_with_doc,
+        module.num_key_value_groups,
+    )
+
+    key_states_without_doc = repeat_kv(
+        key_without_doc,
+        module.num_key_value_groups,
+    )
+
+    value_states = repeat_kv(
+        value,
+        module.num_key_value_groups,
+    )
+
+    # ========================================================
+    # ATTENTION SCORES — WITH DOCUMENT
+    # ========================================================
+
+    attn_scores_with_doc = torch.matmul(
+        query_with_doc,
+        key_states_with_doc.transpose(2, 3),
     ) * scaling
 
+    # ========================================================
+    # ATTENTION SCORES — WITHOUT DOCUMENT
+    # ========================================================
+
+    attn_scores_without_doc = torch.matmul(
+        query_without_doc,
+        key_states_without_doc.transpose(2, 3),
+    ) * scaling
+
+    # ========================================================
+    # CAUSAL MASK
+    # ========================================================
+
     if attention_mask is not None:
-        causal_mask = attention_mask[:, :, :, :key_states.shape[-2]]
-        attn_scores = attn_scores + causal_mask
 
-    attn_weights_with_doc = nn.functional.softmax(
-        attn_scores,
-        dim=-1,
-        dtype=torch.float32,
-    ).to(query.dtype)
+        causal_mask_with_doc = (
+            attention_mask[
+                :,
+                :,
+                :,
+                :key_states_with_doc.shape[-2],
+            ]
+        )
 
-    if document_attention_mask is not None and retrieval_decision is not None:
-        attn_weights_no_doc = nn.functional.softmax(
-            attn_scores + document_attention_mask,
+        causal_mask_without_doc = (
+            attention_mask[
+                :,
+                :,
+                :,
+                :key_states_without_doc.shape[-2],
+            ]
+        )
+
+        attn_scores_with_doc = (
+            attn_scores_with_doc
+            + causal_mask_with_doc
+        )
+
+        attn_scores_without_doc = (
+            attn_scores_without_doc
+            + causal_mask_without_doc
+        )
+
+    # ========================================================
+    # SOFTMAX — WITH DOCUMENT
+    # ========================================================
+
+    attn_weights_with_doc = (
+        nn.functional.softmax(
+            attn_scores_with_doc,
             dim=-1,
             dtype=torch.float32,
-        ).to(query.dtype)
+        ).to(query_with_doc.dtype)
+    )
 
-        retrieval_decision = retrieval_decision.view(-1, 1, 1, 1)
+    # ========================================================
+    # SOFTMAX — WITHOUT DOCUMENT
+    # ========================================================
+
+    if (
+        document_attention_mask is not None
+        and retrieval_decision is not None
+    ):
+
+        attn_weights_without_doc = (
+            nn.functional.softmax(
+                attn_scores_without_doc
+                + document_attention_mask,
+                dim=-1,
+                dtype=torch.float32,
+            ).to(query_without_doc.dtype)
+        )
+
+        # ----------------------------------------------------
+        # Reshape retrieval decision
+        # ----------------------------------------------------
+
+        retrieval_decision = (
+            retrieval_decision.view(
+                -1,
+                1,
+                1,
+                1,
+            )
+        )
+
+        # ----------------------------------------------------
+        # Attention mixing
+        # ----------------------------------------------------
 
         attn_weights = (
-            retrieval_decision * attn_weights_with_doc
-            + (1.0 - retrieval_decision) * attn_weights_no_doc
+            retrieval_decision
+            * attn_weights_with_doc
+            + (1.0 - retrieval_decision)
+            * attn_weights_without_doc
         )
+
     else:
+
         attn_weights = attn_weights_with_doc
+
+    # ========================================================
+    # DROPOUT
+    # ========================================================
 
     attn_weights = nn.functional.dropout(
         attn_weights,
@@ -68,12 +169,24 @@ def attention_mixing_forward(
         training=module.training,
     )
 
+    attn_weights = attn_weights.to(
+        value_states.dtype
+    )
+
+    # ========================================================
+    # ATTENTION OUTPUT
+    # ========================================================
+
     attn_output = torch.matmul(
         attn_weights,
         value_states,
     )
 
-    attn_output = attn_output.transpose(1, 2).contiguous()
+    attn_output = (
+        attn_output
+        .transpose(1, 2)
+        .contiguous()
+    )
 
     return attn_output, attn_weights
 
@@ -83,10 +196,10 @@ class AttentionMixingProbeAttention(Qwen3Attention):
     def forward(
         self,
         hidden_states: torch.Tensor,
-        position_embeddings: tuple[torch.Tensor, torch.Tensor],
+        position_embeddings_with_doc: tuple[torch.Tensor, torch.Tensor],
+        position_embeddings_without_doc: tuple[torch.Tensor, torch.Tensor],
         attention_mask: torch.Tensor | None,
         past_key_values: Cache | None = None,
-
         document_attention_mask: torch.Tensor | None = None,
         retrieval_decision: torch.Tensor | None = None,
 
@@ -99,106 +212,73 @@ class AttentionMixingProbeAttention(Qwen3Attention):
         key_states = self.k_norm(self.k_proj(hidden_states).view(hidden_shape)).transpose(1, 2)
         value_states = self.v_proj(hidden_states).view(hidden_shape).transpose(1, 2)
 
-        cos, sin = position_embeddings
-        query_states, key_states = apply_rotary_pos_emb(query_states, key_states, cos, sin)
+        cos_with_doc, sin_with_doc = position_embeddings_with_doc
+
+        query_states_with_doc, key_states_with_doc = (
+            apply_rotary_pos_emb(
+                query_states,
+                key_states,
+                cos_with_doc,
+                sin_with_doc,
+            )
+        )
+
+        cos_without_doc, sin_without_doc = position_embeddings_without_doc
+
+        query_states_without_doc, key_states_without_doc = (
+            apply_rotary_pos_emb(
+                query_states,
+                key_states,
+                cos_without_doc,
+                sin_without_doc,
+            )
+        )
 
         if past_key_values is not None:
-            key_states, value_states = past_key_values.update(key_states, value_states, self.layer_idx)
 
+            key_states_with_doc, value_states_with_doc = (
+                past_key_values.cache_with_doc.update(
+                    key_states_with_doc,
+                    value_states,
+                    self.layer_idx,
+                )
+            )
+
+            key_states_without_doc, value_states_without_doc = (
+                past_key_values.cache_without_doc.update(
+                    key_states_without_doc,
+                    value_states,
+                    self.layer_idx,
+                )
+            )
+            
         attn_output, attn_weights = attention_mixing_forward(
             self,
-            query_states,
-            key_states,
-            value_states,
+
+            query_states_with_doc,
+            key_states_with_doc,
+
+            query_states_without_doc,
+            key_states_without_doc,
+
+            value_states_with_doc,
+
             attention_mask,
-            dropout=0.0 if not self.training else self.attention_dropout,
+
+            dropout=(
+                0.0
+                if not self.training
+                else self.attention_dropout
+            ),
+
             scaling=self.scaling,
-            sliding_window=self.sliding_window,  # diff with Llama
+
+            document_attention_mask=document_attention_mask,
+            retrieval_decision=retrieval_decision,
+
             **kwargs,
         )
 
         attn_output = attn_output.reshape(*input_shape, -1).contiguous()
         attn_output = self.o_proj(attn_output)
         return attn_output, attn_weights
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-if __name__ == "__main__":
-    from transformers.models.qwen3.configuration_qwen3 import Qwen3Config
-
-    torch.manual_seed(42)
-
-    B = 1
-    L = 4
-
-    config = Qwen3Config(
-        hidden_size=32,
-        intermediate_size=64,
-        num_hidden_layers=1,
-        num_attention_heads=4,
-        num_key_value_heads=4,
-    )
-
-    attention = AttentionMixingProbeAttention(
-        config=config,
-        layer_idx=0,
-    )
-
-    hidden_states = torch.randn(
-        B,
-        L,
-        config.hidden_size,
-    )
-
-    document_mask = torch.tensor([
-        [0, 0, 1, 1],
-    ])
-
-    document_attention_mask = (
-        document_mask[:, None, None, :]
-        .float()
-        .masked_fill(
-            document_mask[:, None, None, :].bool(),
-            float("-inf"),
-        )
-    )
-
-    retrieval_decision = torch.tensor([0.5])
-
-    cos = torch.ones(
-        B,
-        L,
-        attention.head_dim,
-    )
-
-    sin = torch.zeros(
-        B,
-        L,
-        attention.head_dim,
-    )
-
-    output, attn_weights = attention(
-        hidden_states=hidden_states,
-        position_embeddings=(cos, sin),
-        attention_mask=None,
-        document_attention_mask=document_attention_mask,
-        retrieval_decision=retrieval_decision,
-    )
-
-    print("Output shape :", output.shape)
-    print("Attention shape:", attn_weights.shape)
-
-    print("Smoke test passed.")

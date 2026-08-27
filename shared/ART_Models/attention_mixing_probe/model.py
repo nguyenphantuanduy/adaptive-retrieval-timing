@@ -32,12 +32,29 @@ from transformers.models.qwen3.modeling_qwen3 import (
     create_causal_mask,
     create_sliding_window_causal_mask,
 )
-
+from .cache_utils import ARTCache
 from .decoder_layer import AttentionMixingProbeDecoderLayer
+from .utils import (
+    ensure_document_attention_mask, 
+    create_position_ids_without_doc,
+    align_document_attention_mask,
+)
 
+class AttentionMixingProbePreTrainedModel(
+    Qwen3PreTrainedModel
+):
+
+    _no_split_modules = [
+        "AttentionMixingProbeDecoderLayer"
+    ]
+
+    _supports_flash_attn = False
+    _supports_sdpa = False
+    _supports_flex_attn = False
+    _supports_attention_backend = False
 
 @auto_docstring
-class AttentionMixingProbeModel(Qwen3PreTrainedModel):
+class AttentionMixingProbeModel(AttentionMixingProbePreTrainedModel):
     def __init__(self, config: Qwen3Config):
         super().__init__(config)
 
@@ -91,7 +108,7 @@ class AttentionMixingProbeModel(Qwen3PreTrainedModel):
         retrieval_decision: torch.Tensor | None = None,
         **kwargs: Unpack[TransformersKwargs],
     ) -> BaseModelOutputWithPast:
-
+        # print("attn implementation:", self.config._attn_implementation)
         if (input_ids is None) ^ (inputs_embeds is not None):
             raise ValueError(
                 "You must specify exactly one of input_ids or inputs_embeds"
@@ -100,17 +117,26 @@ class AttentionMixingProbeModel(Qwen3PreTrainedModel):
         if inputs_embeds is None:
             inputs_embeds = self.embed_tokens(input_ids)
 
-        if use_cache and past_key_values is None:
-            past_key_values = DynamicCache(config=self.config)
+        if use_cache:
+            if past_key_values is None or not isinstance(
+                past_key_values,
+                ARTCache,
+            ):
+                past_key_values = ARTCache(
+                    config=self.config,
+                )
+
+        if document_attention_mask is not None and input_ids is not None:
+            document_attention_mask = ensure_document_attention_mask(document_attention_mask)
 
         if position_ids is None:
             past_seen_tokens = (
-                past_key_values.get_seq_length()
+                past_key_values.cache_with_doc.get_seq_length()
                 if past_key_values is not None
                 else 0
             )
 
-            position_ids = (
+            position_ids_with_doc = (
                 torch.arange(
                     inputs_embeds.shape[1],
                     device=inputs_embeds.device,
@@ -118,7 +144,22 @@ class AttentionMixingProbeModel(Qwen3PreTrainedModel):
                 + past_seen_tokens
             )
 
-            position_ids = position_ids.unsqueeze(0)
+            position_ids_with_doc = (
+                position_ids_with_doc.unsqueeze(0)
+            )
+
+        else:
+            position_ids_with_doc = position_ids
+
+        if document_attention_mask is not None:
+            position_ids_without_doc = (
+                create_position_ids_without_doc(
+                    position_ids_with_doc=position_ids_with_doc,
+                    document_attention_mask=document_attention_mask,
+                )
+            )
+        else:
+            position_ids_without_doc = position_ids_with_doc
 
         # It may already have been prepared by e.g. `generate`
         if not isinstance(causal_mask_mapping := attention_mask, dict):
@@ -128,8 +169,12 @@ class AttentionMixingProbeModel(Qwen3PreTrainedModel):
                 "config": self.config,
                 "inputs_embeds": inputs_embeds,
                 "attention_mask": attention_mask,
-                "past_key_values": past_key_values,
-                "position_ids": position_ids,
+                "past_key_values": (
+                    past_key_values.cache_with_doc 
+                    if past_key_values is not None 
+                    else None
+                ),
+                "position_ids": position_ids_with_doc,
             }
 
             # Create the masks
@@ -143,7 +188,7 @@ class AttentionMixingProbeModel(Qwen3PreTrainedModel):
                 causal_mask_mapping["sliding_attention"] = (
                     create_sliding_window_causal_mask(**mask_kwargs)
                 )
-
+        # print(causal_mask_mapping)
         # ============================================================
         # ALIGN DOCUMENT ATTENTION MASK WITH CAUSAL MASK
         # ============================================================
@@ -154,30 +199,23 @@ class AttentionMixingProbeModel(Qwen3PreTrainedModel):
                 self.config.layer_types[0]
             ]
 
-            causal_length = causal_mask.shape[-1]
-            document_length = document_attention_mask.shape[-1]
-
-            if document_length < causal_length:
-
-                pad_length = causal_length - document_length
-
-                document_attention_mask = nn.functional.pad(
-                    document_attention_mask,
-                    (0, pad_length),
-                    value=0.0,
+            document_attention_mask = (
+                align_document_attention_mask(
+                    document_attention_mask=document_attention_mask,
+                    causal_mask=causal_mask,
                 )
-
-            elif document_length > causal_length:
-
-                document_attention_mask = (
-                    document_attention_mask[..., :causal_length]
-                )
+            )
 
         hidden_states = inputs_embeds
 
-        position_embeddings = self.rotary_emb(
+        position_embeddings_with_doc = self.rotary_emb(
             hidden_states,
-            position_ids,
+            position_ids_with_doc,
+        )
+
+        position_embeddings_without_doc = self.rotary_emb(
+            hidden_states,
+            position_ids_without_doc,
         )
 
         for i, decoder_layer in enumerate(
@@ -188,8 +226,10 @@ class AttentionMixingProbeModel(Qwen3PreTrainedModel):
                 attention_mask=causal_mask_mapping[
                     self.config.layer_types[i]
                 ],
-                position_embeddings=position_embeddings,
-                position_ids=position_ids,
+                position_embeddings_with_doc=position_embeddings_with_doc,
+                position_embeddings_without_doc=position_embeddings_without_doc,
+                position_ids_with_doc=position_ids_with_doc,
+                position_ids_without_doc=position_ids_without_doc,
                 past_key_values=past_key_values,
                 use_cache=use_cache,
                 document_attention_mask=document_attention_mask,
@@ -208,9 +248,10 @@ class AttentionMixingProbeModel(Qwen3PreTrainedModel):
             ),
         )
 
+
 @auto_docstring
 class AttentionMixingProbeForCausalLM(
-    Qwen3PreTrainedModel,
+    AttentionMixingProbePreTrainedModel,
     GenerationMixin,
 ):
     _tied_weights_keys = {
