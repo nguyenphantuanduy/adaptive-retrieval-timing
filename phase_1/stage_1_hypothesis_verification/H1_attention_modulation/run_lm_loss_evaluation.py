@@ -26,7 +26,12 @@ from shared.utils.compute_per_sample_lm_loss import (
 # CONFIG
 # ============================================================
 
-BATCH_SIZE = 8
+# Batch size is selected by hop.
+BATCH_SIZE_BY_HOP = {
+    "2-hop": 4,
+    "3-hop": 1,
+    "4-hop": 1,
+}
 
 NUM_DECISION_LEVELS = 32
 
@@ -46,6 +51,7 @@ def _move_tensors_to_device(
 ) -> dict[str, Any]:
     """
     Move tensor fields of a model-input dictionary to device.
+
     Non-tensor fields are kept unchanged.
     """
 
@@ -82,7 +88,10 @@ def _make_column_name(
     Flatten a ratio + retrieval decision level into one CSV column.
 
     Example:
-        2:1 / 0/32
+
+        ratio = (2, 1)
+        decision_level = 0
+
         -> 2:1/0.0000
     """
 
@@ -94,6 +103,23 @@ def _make_column_name(
         f"{ratio[0]}:{ratio[1]}/"
         f"{decision_score:.4f}"
     )
+
+
+def _get_batch_size_for_hop(
+    hop: str,
+) -> int:
+    """
+    Return the GPU forward batch size for a given hop.
+    """
+
+    if hop not in BATCH_SIZE_BY_HOP:
+        raise ValueError(
+            f"Unknown hop '{hop}'. "
+            f"Expected one of: "
+            f"{list(BATCH_SIZE_BY_HOP.keys())}"
+        )
+
+    return BATCH_SIZE_BY_HOP[hop]
 
 
 # ============================================================
@@ -111,6 +137,20 @@ def _compute_ratio_losses(
 
     The full 33-sample model input stays on CPU.
     It is moved to GPU in smaller batches to avoid CUDA OOM.
+
+    Parameters
+    ----------
+    model:
+        ART model.
+
+    model_input:
+        Input containing exactly 33 decision levels.
+
+    device:
+        CUDA device.
+
+    batch_size:
+        Number of decision levels processed simultaneously.
 
     Returns
     -------
@@ -132,7 +172,11 @@ def _compute_ratio_losses(
         f"got {num_samples}"
     )
 
-    ratio_losses = []
+    ratio_losses: list[float] = []
+
+    # ========================================================
+    # PROCESS 33 DECISION LEVELS
+    # ========================================================
 
     for start in range(
         0,
@@ -161,7 +205,7 @@ def _compute_ratio_losses(
         )
 
         # ----------------------------------------------------
-        # Forward
+        # Forward + LM loss
         # ----------------------------------------------------
 
         with torch.inference_mode():
@@ -180,10 +224,6 @@ def _compute_ratio_losses(
                     "retrieval_decision"
                 ],
             )
-
-            # ------------------------------------------------
-            # Per-sample LM loss
-            # ------------------------------------------------
 
             per_sample_loss = (
                 compute_per_sample_lm_loss(
@@ -204,7 +244,7 @@ def _compute_ratio_losses(
         )
 
         # ----------------------------------------------------
-        # Cleanup
+        # Cleanup GPU tensors
         # ----------------------------------------------------
 
         del outputs
@@ -214,11 +254,20 @@ def _compute_ratio_losses(
         gc.collect()
 
         if torch.cuda.is_available():
+
             torch.cuda.empty_cache()
+
+    # ========================================================
+    # SANITY CHECK
+    # ========================================================
 
     assert (
         len(ratio_losses)
         == NUM_DECISION_LEVELS + 1
+    ), (
+        f"Expected "
+        f"{NUM_DECISION_LEVELS + 1} losses, "
+        f"got {len(ratio_losses)}"
     )
 
     return ratio_losses
@@ -231,7 +280,6 @@ def _compute_ratio_losses(
 def run_lm_loss_evaluation(
     model,
     tokenizer,
-    batch_size: int = BATCH_SIZE,
     output_dir: str | Path = OUTPUT_DIR,
 ) -> dict[str, list[dict[str, Any]]]:
     """
@@ -248,16 +296,17 @@ def run_lm_loss_evaluation(
         sample_index
         LM loss for every ratio / retrieval decision
 
+    Batch size is selected automatically by hop:
+
+        2-hop -> 4
+        3-hop -> 1
+        4-hop -> 1
+
     Notes
     -----
-    Terminal output is intentionally kept compact so that
-    large-scale evaluation does not flood the terminal.
+    Terminal output is intentionally compact for large-scale
+    evaluation.
     """
-
-    if batch_size < 1:
-        raise ValueError(
-            "batch_size must be >= 1"
-        )
 
     output_dir = Path(output_dir)
 
@@ -294,8 +343,15 @@ def run_lm_loss_evaluation(
     )
 
     print(
-        f"Batch size      : {batch_size}"
+        "Batch size by hop:"
     )
+
+    for hop, batch_size in BATCH_SIZE_BY_HOP.items():
+
+        print(
+            f"  {hop:<8}: "
+            f"{batch_size}"
+        )
 
     print(
         f"Decision levels : "
@@ -304,7 +360,8 @@ def run_lm_loss_evaluation(
     )
 
     print(
-        f"Output directory: {output_dir}"
+        f"Output directory: "
+        f"{output_dir}"
     )
 
     print()
@@ -328,14 +385,19 @@ def run_lm_loss_evaluation(
 
     print()
     print("Dataset:")
-    
+
     total_samples = 0
 
     for hop, samples in datasets.items():
 
+        batch_size = _get_batch_size_for_hop(
+            hop
+        )
+
         print(
             f"  {hop:<8}: "
-            f"{len(samples):,} samples"
+            f"{len(samples):,} samples "
+            f"(batch={batch_size})"
         )
 
         total_samples += len(samples)
@@ -366,6 +428,10 @@ def run_lm_loss_evaluation(
 
         for sample in samples:
 
+            # ------------------------------------------------
+            # Verify sample ID
+            # ------------------------------------------------
+
             assert "id" in sample, (
                 "Every sample must contain "
                 "an 'id' field."
@@ -386,7 +452,7 @@ def run_lm_loss_evaluation(
                     )
 
     # --------------------------------------------------------
-    # Deterministic ordering
+    # Deterministic ratio ordering
     # --------------------------------------------------------
 
     all_ratios = sorted(
@@ -396,6 +462,10 @@ def run_lm_loss_evaluation(
             x[1],
         ),
     )
+
+    # --------------------------------------------------------
+    # CSV loss columns
+    # --------------------------------------------------------
 
     all_columns = [
         _make_column_name(
@@ -439,11 +509,20 @@ def run_lm_loss_evaluation(
 
     for hop, samples in datasets.items():
 
+        # ----------------------------------------------------
+        # Select batch size for this hop
+        # ----------------------------------------------------
+
+        batch_size = _get_batch_size_for_hop(
+            hop
+        )
+
         print()
         print("=" * 100)
         print(
             f"{hop.upper()} — "
-            f"{len(samples):,} SAMPLES"
+            f"{len(samples):,} SAMPLES "
+            f"| BATCH SIZE = {batch_size}"
         )
         print("=" * 100)
 
@@ -469,14 +548,15 @@ def run_lm_loss_evaluation(
             sample_id = sample["id"]
 
             # ------------------------------------------------
-            # Compact progress line
+            # Compact progress
             # ------------------------------------------------
 
             print(
                 f"[{processed_samples + 1:,}/"
                 f"{total_samples:,}] "
                 f"{hop} | "
-                f"sample {sample_index + 1:,}/"
+                f"sample "
+                f"{sample_index + 1:,}/"
                 f"{len(samples):,} | "
                 f"id={sample_id}",
                 flush=True,
@@ -500,6 +580,10 @@ def run_lm_loss_evaluation(
                 column: ""
                 for column in all_columns
             }
+
+            # ------------------------------------------------
+            # Sample identification
+            # ------------------------------------------------
 
             row["sample_id"] = sample_id
 
@@ -549,7 +633,13 @@ def run_lm_loss_evaluation(
                 )
 
                 # --------------------------------------------
-                # Forward 33 levels
+                # Forward all 33 decision levels
+                #
+                # Batch size depends on hop:
+                #
+                # 2-hop -> 4
+                # 3-hop -> 1
+                # 4-hop -> 1
                 # --------------------------------------------
 
                 ratio_losses = (
@@ -600,6 +690,10 @@ def run_lm_loss_evaluation(
             )
 
             processed_samples += 1
+
+            # ------------------------------------------------
+            # Completion progress
+            # ------------------------------------------------
 
             print(
                 f"    ✓ complete | "
@@ -653,11 +747,18 @@ def run_lm_loss_evaluation(
         )
 
         print(
-            f"  Samples : {len(hop_results):,}"
+            f"  Samples    : "
+            f"{len(hop_results):,}"
         )
 
         print(
-            f"  Saved   : {output_path}"
+            f"  Batch size : "
+            f"{batch_size}"
+        )
+
+        print(
+            f"  Saved      : "
+            f"{output_path}"
         )
 
     # ========================================================
@@ -685,7 +786,8 @@ def run_lm_loss_evaluation(
         )
 
         print(
-            f"{hop:<8} → {output_path}"
+            f"{hop:<8} → "
+            f"{output_path}"
         )
 
     print()
@@ -783,7 +885,6 @@ if __name__ == "__main__":
     results = run_lm_loss_evaluation(
         model=probe,
         tokenizer=tokenizer,
-        batch_size=BATCH_SIZE,
         output_dir=OUTPUT_DIR,
     )
 
