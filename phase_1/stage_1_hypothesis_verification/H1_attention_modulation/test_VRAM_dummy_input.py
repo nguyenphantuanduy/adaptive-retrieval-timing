@@ -30,7 +30,7 @@ OUTPUT_DIR = (
 DEVICE_ID = 0
 
 BATCH_SIZE = 1
-SEQ_LENGTH = 5000
+SEQ_LENGTH = 4000
 
 # ============================================================
 # MAIN
