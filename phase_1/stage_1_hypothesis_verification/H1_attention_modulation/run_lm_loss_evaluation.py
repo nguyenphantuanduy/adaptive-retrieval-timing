@@ -27,25 +27,51 @@ from shared.utils.compute_per_sample_lm_loss import (
 # CONFIG
 # ============================================================
 
-# Batch size is selected by hop.
+# ------------------------------------------------------------
+# FORWARD BATCH SIZE
 #
-# This is the batch size used for the 33 retrieval-decision
-# levels of ONE ratio.
+# This controls ONLY the model forward.
 #
-# 2-hop -> 4
-# 3-hop -> 1
-# 4-hop -> 1
+# One ratio contains:
 #
-BATCH_SIZE_BY_HOP = {
-    "2-hop": 4,
-    "3-hop": 1,
-    "4-hop": 1,
+#     33 retrieval-decision levels
+#
+# 2-hop -> forward batch 8
+# 3-hop -> forward batch 4
+# 4-hop -> forward batch 4
+# ------------------------------------------------------------
+
+FORWARD_BATCH_SIZE_BY_HOP = {
+    "2-hop": 8,
+    "3-hop": 4,
+    "4-hop": 4,
 }
+
+
+# ------------------------------------------------------------
+# LOSS BATCH SIZE
+#
+# CE is intentionally computed one sample at a time.
+#
+# This keeps the GPU memory usage of CrossEntropyLoss low.
+# ------------------------------------------------------------
+
+LOSS_BATCH_SIZE = 1
+
 
 NUM_DECISION_LEVELS = 32
 
-# Save CSV every N completed samples.
+
+# ------------------------------------------------------------
+# CSV CHECKPOINT
+# ------------------------------------------------------------
+
 SAVE_EVERY = 100
+
+
+# ------------------------------------------------------------
+# OUTPUT
+# ------------------------------------------------------------
 
 OUTPUT_DIR = Path(
     "phase_1/stage_1_hypothesis_verification/"
@@ -117,21 +143,21 @@ def _make_column_name(
     )
 
 
-def _get_batch_size_for_hop(
+def _get_forward_batch_size_for_hop(
     hop: str,
 ) -> int:
     """
     Return the GPU forward batch size for a given hop.
     """
 
-    if hop not in BATCH_SIZE_BY_HOP:
+    if hop not in FORWARD_BATCH_SIZE_BY_HOP:
         raise ValueError(
             f"Unknown hop '{hop}'. "
             f"Expected one of: "
-            f"{list(BATCH_SIZE_BY_HOP.keys())}"
+            f"{list(FORWARD_BATCH_SIZE_BY_HOP.keys())}"
         )
 
-    return BATCH_SIZE_BY_HOP[hop]
+    return FORWARD_BATCH_SIZE_BY_HOP[hop]
 
 
 def _parse_mode(
@@ -171,42 +197,47 @@ def _parse_mode(
 
 
 # ============================================================
-# EVALUATE ONE LM-LOSS SAMPLE
+# FORWARD PHASE
 # ============================================================
 
-def _compute_ratio_losses(
+def _forward_ratio_logits(
     model,
     model_input: dict[str, Any],
     device: torch.device,
-    batch_size: int,
-) -> list[float]:
+    forward_batch_size: int,
+) -> tuple[list[torch.Tensor], torch.Tensor]:
     """
-    Forward one ratio's 33 retrieval-decision samples.
+    Forward one ratio across all 33 retrieval-decision levels.
 
-    The full 33-sample model input stays on CPU.
+    IMPORTANT
+    ---------
+    This function ONLY performs model forward.
 
-    It is moved to GPU in smaller batches to avoid CUDA OOM.
+    It does NOT calculate CrossEntropyLoss.
 
-    Parameters
-    ----------
-    model:
-        ART model.
+    Forward batches:
 
-    model_input:
-        Input containing exactly 33 decision levels.
+        2-hop -> 8
+        3-hop -> 4
+        4-hop -> 4
 
-    device:
-        CUDA device.
+    Each forward batch produces logits:
 
-    batch_size:
-        Number of decision levels processed simultaneously.
+        [batch, sequence_length, vocab_size]
+
+    The logits are immediately moved to CPU.
+
+    Therefore GPU memory does NOT retain all 33 decision-level
+    logits simultaneously.
 
     Returns
     -------
-    list[float]
-        33 per-sample LM losses corresponding to:
 
-            0/32, 1/32, ..., 32/32
+    logits_cpu:
+        List containing one CPU tensor per forward batch.
+
+    labels_cpu:
+        Full labels tensor on CPU.
     """
 
     num_samples = (
@@ -221,25 +252,43 @@ def _compute_ratio_losses(
         f"got {num_samples}"
     )
 
-    ratio_losses: list[float] = []
+    # --------------------------------------------------------
+    # Labels never need to be on GPU during forward.
+    #
+    # Keep them on CPU so they can later be moved to GPU
+    # one sample at a time during CE.
+    # --------------------------------------------------------
+
+    labels_cpu = (
+        model_input["labels"]
+        .detach()
+        .cpu()
+    )
+
+    assert labels_cpu.shape == (
+        num_samples,
+        model_input["labels"].shape[1],
+    )
+
+    logits_cpu: list[torch.Tensor] = []
 
     # ========================================================
-    # PROCESS 33 DECISION LEVELS
+    # FORWARD ALL DECISION LEVELS
     # ========================================================
 
     for start in range(
         0,
         num_samples,
-        batch_size,
+        forward_batch_size,
     ):
 
         end = min(
-            start + batch_size,
+            start + forward_batch_size,
             num_samples,
         )
 
         # ----------------------------------------------------
-        # CPU -> GPU
+        # Slice CPU input
         # ----------------------------------------------------
 
         batch_input = _slice_model_input(
@@ -248,13 +297,17 @@ def _compute_ratio_losses(
             end,
         )
 
+        # ----------------------------------------------------
+        # Move only this forward batch to GPU
+        # ----------------------------------------------------
+
         batch_input = _move_tensors_to_device(
             batch_input,
             device,
         )
 
         # ----------------------------------------------------
-        # Forward + LM loss
+        # Forward
         # ----------------------------------------------------
 
         with torch.inference_mode():
@@ -274,22 +327,26 @@ def _compute_ratio_losses(
                 ],
             )
 
-            per_sample_loss = (
-                compute_per_sample_lm_loss(
-                    logits=outputs.logits,
-                    labels=batch_input["labels"],
-                )
+            # ------------------------------------------------
+            # IMPORTANT:
+            #
+            # Immediately move logits to CPU.
+            #
+            # This releases the GPU copy after this iteration.
+            # ------------------------------------------------
+
+            batch_logits_cpu = (
+                outputs.logits
+                .detach()
+                .cpu()
             )
 
         # ----------------------------------------------------
-        # Move scalar losses back to CPU
+        # Store CPU logits
         # ----------------------------------------------------
 
-        ratio_losses.extend(
-            per_sample_loss
-            .detach()
-            .cpu()
-            .tolist()
+        logits_cpu.append(
+            batch_logits_cpu
         )
 
         # ----------------------------------------------------
@@ -297,7 +354,7 @@ def _compute_ratio_losses(
         # ----------------------------------------------------
 
         del outputs
-        del per_sample_loss
+        del batch_logits_cpu
         del batch_input
 
         gc.collect()
@@ -309,6 +366,179 @@ def _compute_ratio_losses(
     # SANITY CHECK
     # ========================================================
 
+    total_forwarded = sum(
+        logits.shape[0]
+        for logits in logits_cpu
+    )
+
+    assert total_forwarded == num_samples, (
+        f"Expected {num_samples} forwarded samples, "
+        f"got {total_forwarded}"
+    )
+
+    return (
+        logits_cpu,
+        labels_cpu,
+    )
+
+
+# ============================================================
+# LOSS PHASE
+# ============================================================
+
+def _compute_losses_from_cpu_logits(
+    logits_cpu: list[torch.Tensor],
+    labels_cpu: torch.Tensor,
+    device: torch.device,
+) -> list[float]:
+    """
+    Compute per-sample LM loss from CPU logits.
+
+    IMPORTANT
+    ---------
+    The forward phase has already completed.
+
+    CE is now computed separately with LOSS_BATCH_SIZE = 1.
+
+    For every decision level:
+
+        CPU logits
+            ↓
+        GPU
+            ↓
+        CrossEntropyLoss
+            ↓
+        scalar CPU value
+            ↓
+        delete GPU tensors
+
+    Therefore only ONE decision level's logits is on GPU
+    during loss computation.
+    """
+
+    # --------------------------------------------------------
+    # Flatten forward batches into individual samples.
+    #
+    # We intentionally do not concatenate them into one huge
+    # tensor because that would create another large CPU tensor.
+    # --------------------------------------------------------
+
+    total_samples = sum(
+        logits.shape[0]
+        for logits in logits_cpu
+    )
+
+    assert (
+        total_samples
+        == NUM_DECISION_LEVELS + 1
+    )
+
+    assert labels_cpu.shape[0] == total_samples
+
+    ratio_losses: list[float] = []
+
+    current_index = 0
+
+    # ========================================================
+    # PROCESS ONE SAMPLE AT A TIME
+    # ========================================================
+
+    for batch_logits_cpu in logits_cpu:
+
+        batch_size = (
+            batch_logits_cpu.shape[0]
+        )
+
+        for local_index in range(
+            batch_size
+        ):
+
+            global_index = (
+                current_index
+                + local_index
+            )
+
+            # ------------------------------------------------
+            # LOSS BATCH = 1
+            # ------------------------------------------------
+
+            logits_single_cpu = (
+                batch_logits_cpu[
+                    local_index:local_index + 1
+                ]
+            )
+
+            labels_single_cpu = (
+                labels_cpu[
+                    global_index:global_index + 1
+                ]
+            )
+
+            # ------------------------------------------------
+            # Move ONE sample to GPU
+            # ------------------------------------------------
+
+            logits_single = (
+                logits_single_cpu.to(
+                    device,
+                    non_blocking=True,
+                )
+            )
+
+            labels_single = (
+                labels_single_cpu.to(
+                    device,
+                    non_blocking=True,
+                )
+            )
+
+            # ------------------------------------------------
+            # CE
+            # ------------------------------------------------
+
+            with torch.inference_mode():
+
+                per_sample_loss = (
+                    compute_per_sample_lm_loss(
+                        logits=logits_single,
+                        labels=labels_single,
+                    )
+                )
+
+            # ------------------------------------------------
+            # Extract scalar immediately
+            # ------------------------------------------------
+
+            ratio_losses.extend(
+                per_sample_loss
+                .detach()
+                .cpu()
+                .tolist()
+            )
+
+            # ------------------------------------------------
+            # Cleanup GPU
+            # ------------------------------------------------
+
+            del logits_single
+            del labels_single
+            del per_sample_loss
+
+            gc.collect()
+
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
+        # ----------------------------------------------------
+        # Cleanup CPU batch logits
+        # ----------------------------------------------------
+
+        del batch_logits_cpu
+
+    # ========================================================
+    # FINAL SANITY CHECK
+    # ========================================================
+
     assert (
         len(ratio_losses)
         == NUM_DECISION_LEVELS + 1
@@ -317,6 +547,84 @@ def _compute_ratio_losses(
         f"{NUM_DECISION_LEVELS + 1} losses, "
         f"got {len(ratio_losses)}"
     )
+
+    return ratio_losses
+
+
+# ============================================================
+# COMPLETE RATIO EVALUATION
+# ============================================================
+
+def _compute_ratio_losses(
+    model,
+    model_input: dict[str, Any],
+    device: torch.device,
+    forward_batch_size: int,
+) -> list[float]:
+    """
+    Compute LM loss for one ratio.
+
+    This is explicitly split into TWO phases:
+
+        PHASE 1
+        -------
+        Forward
+
+        2-hop -> batch 8
+        3-hop -> batch 4
+        4-hop -> batch 4
+
+        logits are moved to CPU immediately.
+
+
+        PHASE 2
+        -------
+        CrossEntropyLoss
+
+        batch = 1
+
+        One logits tensor is moved to GPU,
+        CE is calculated,
+        scalar is moved back to CPU,
+        GPU tensor is deleted.
+
+    This avoids the previous situation where the forward
+    logits and CE intermediate tensors compete for GPU memory.
+    """
+
+    # ========================================================
+    # PHASE 1 — FORWARD
+    # ========================================================
+
+    logits_cpu, labels_cpu = (
+        _forward_ratio_logits(
+            model=model,
+            model_input=model_input,
+            device=device,
+            forward_batch_size=forward_batch_size,
+        )
+    )
+
+    # ========================================================
+    # PHASE 2 — CROSS ENTROPY
+    # ========================================================
+
+    ratio_losses = (
+        _compute_losses_from_cpu_logits(
+            logits_cpu=logits_cpu,
+            labels_cpu=labels_cpu,
+            device=device,
+        )
+    )
+
+    # --------------------------------------------------------
+    # Cleanup CPU tensors
+    # --------------------------------------------------------
+
+    del logits_cpu
+    del labels_cpu
+
+    gc.collect()
 
     return ratio_losses
 
@@ -418,13 +726,15 @@ def _evaluate_one_sample(
     hop: str,
     all_columns: list[str],
     device: torch.device,
-    batch_size: int,
+    forward_batch_size: int,
 ) -> dict[str, Any]:
     """
     Evaluate one dataset sample across:
 
         ratio
             -> 33 retrieval decision levels
+
+    Forward and CE are performed in separate phases.
     """
 
     assert "id" in sample, (
@@ -445,7 +755,7 @@ def _evaluate_one_sample(
     )
 
     # --------------------------------------------------------
-    # Initialize one CSV row
+    # Initialize CSV row
     # --------------------------------------------------------
 
     row = {
@@ -497,16 +807,16 @@ def _evaluate_one_sample(
             f"{NUM_DECISION_LEVELS + 1}"
         )
 
-        # ----------------------------------------------------
-        # Forward 33 decision levels
-        # ----------------------------------------------------
+        # ====================================================
+        # FORWARD + CE
+        # ====================================================
 
         ratio_losses = (
             _compute_ratio_losses(
                 model=model,
                 model_input=model_input,
                 device=device,
-                batch_size=batch_size,
+                forward_batch_size=forward_batch_size,
             )
         )
 
@@ -531,6 +841,7 @@ def _evaluate_one_sample(
 
         del model_input
         del lm_sample
+        del ratio_losses
 
         gc.collect()
 
@@ -540,6 +851,8 @@ def _evaluate_one_sample(
             torch.cuda.ipc_collect()
 
     del lm_loss_samples
+
+    gc.collect()
 
     return row
 
@@ -588,9 +901,6 @@ def _initialize_csv(
 ) -> None:
     """
     Create / overwrite a CSV and write its header.
-
-    This intentionally starts a fresh evaluation for the
-    selected mode.
     """
 
     with output_path.open(
@@ -625,35 +935,49 @@ def run_lm_loss_evaluation(
                 -> document ratio
                     -> retrieval decision 0/32 ... 32/32
 
-    Modes
-    -----
+    Forward batch size:
 
-        mode="2"
-            Run only 2-hop.
+        2-hop -> 8
+        3-hop -> 4
+        4-hop -> 4
 
-        mode="3"
-            Run only 3-hop.
+    Loss batch size:
 
-        mode="4"
-            Run only 4-hop.
+        1 for ALL hops
 
-        mode="full"
-            Run 2-hop, 3-hop, and 4-hop.
+    Architecture of computation:
 
-    Batch sizes
-    -----------
-
-        2-hop -> 4
-        3-hop -> 1
-        4-hop -> 1
-
-    Checkpointing
-    -------------
-
-    Results are written every SAVE_EVERY samples.
-
-    This means that the entire validation set is NOT kept
-    in RAM before writing the CSV.
+        CPU
+          |
+          v
+        forward batch
+          |
+          v
+        GPU model
+          |
+          v
+        logits
+          |
+          v
+        CPU
+          |
+          |
+          +---- next forward batch
+          |
+          v
+        all 33 logits on CPU
+          |
+          v
+        one sample -> GPU
+          |
+          v
+        CrossEntropyLoss
+          |
+          v
+        scalar -> CPU
+          |
+          v
+        repeat
     """
 
     output_dir = Path(output_dir)
@@ -695,42 +1019,47 @@ def run_lm_loss_evaluation(
     print("=" * 100)
 
     print(
-        f"Mode            : {mode}"
+        f"Mode             : {mode}"
     )
 
     print(
-        f"Device          : {device}"
+        f"Device           : {device}"
     )
 
     print(
-        "Selected hops    : "
+        "Selected hops     : "
         + ", ".join(selected_hops)
     )
 
     print(
-        "Batch size by hop:"
+        "Forward batch size:"
     )
 
     for hop in selected_hops:
 
         print(
             f"  {hop:<8}: "
-            f"{_get_batch_size_for_hop(hop)}"
+            f"{_get_forward_batch_size_for_hop(hop)}"
         )
 
     print(
-        f"Decision levels : "
+        f"Loss batch size  : "
+        f"{LOSS_BATCH_SIZE}"
+    )
+
+    print(
+        f"Decision levels  : "
         f"0/{NUM_DECISION_LEVELS} ... "
         f"{NUM_DECISION_LEVELS}/{NUM_DECISION_LEVELS}"
     )
 
     print(
-        f"Save every      : "
+        f"Save every       : "
         f"{SAVE_EVERY} samples"
     )
 
     print(
-        f"Output directory: "
+        f"Output directory : "
         f"{output_dir}"
     )
 
@@ -766,7 +1095,7 @@ def run_lm_loss_evaluation(
 
         datasets[hop] = all_datasets[hop]
 
-    # Free reference to the unselected datasets.
+    # Free reference to unselected datasets.
     del all_datasets
 
     # ========================================================
@@ -780,14 +1109,17 @@ def run_lm_loss_evaluation(
 
     for hop, samples in datasets.items():
 
-        batch_size = _get_batch_size_for_hop(
-            hop
+        forward_batch_size = (
+            _get_forward_batch_size_for_hop(
+                hop
+            )
         )
 
         print(
             f"  {hop:<8}: "
             f"{len(samples):,} samples "
-            f"(batch={batch_size})"
+            f"(forward batch={forward_batch_size}, "
+            f"loss batch={LOSS_BATCH_SIZE})"
         )
 
         total_samples += len(samples)
@@ -863,19 +1195,19 @@ def run_lm_loss_evaluation(
     for hop, samples in datasets.items():
 
         # ----------------------------------------------------
-        # Batch size
+        # Forward batch size
         # ----------------------------------------------------
 
-        batch_size = _get_batch_size_for_hop(
-            hop
+        forward_batch_size = (
+            _get_forward_batch_size_for_hop(
+                hop
+            )
         )
 
         output_path = output_paths[hop]
 
         # ----------------------------------------------------
         # Initialize CSV
-        #
-        # This overwrites the previous file for this hop.
         # ----------------------------------------------------
 
         _initialize_csv(
@@ -888,7 +1220,10 @@ def run_lm_loss_evaluation(
         print(
             f"{hop.upper()} — "
             f"{len(samples):,} SAMPLES "
-            f"| BATCH SIZE = {batch_size}"
+            f"| FORWARD BATCH = "
+            f"{forward_batch_size} "
+            f"| LOSS BATCH = "
+            f"{LOSS_BATCH_SIZE}"
         )
         print("=" * 100)
 
@@ -950,7 +1285,7 @@ def run_lm_loss_evaluation(
                 hop=hop,
                 all_columns=all_columns,
                 device=device,
-                batch_size=batch_size,
+                forward_batch_size=forward_batch_size,
             )
 
             # ------------------------------------------------
@@ -970,7 +1305,7 @@ def run_lm_loss_evaluation(
             )
 
             # =================================================
-            # CHECKPOINT EVERY 100 SAMPLES
+            # CHECKPOINT
             # =================================================
 
             if (
@@ -1030,17 +1365,22 @@ def run_lm_loss_evaluation(
         )
 
         print(
-            f"  Samples    : "
+            f"  Samples          : "
             f"{len(samples):,}"
         )
 
         print(
-            f"  Batch size : "
-            f"{batch_size}"
+            f"  Forward batch    : "
+            f"{forward_batch_size}"
         )
 
         print(
-            f"  Saved      : "
+            f"  Loss batch       : "
+            f"{LOSS_BATCH_SIZE}"
+        )
+
+        print(
+            f"  Saved            : "
             f"{output_path}"
         )
 
