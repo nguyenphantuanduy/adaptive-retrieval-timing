@@ -27,49 +27,13 @@ from shared.utils.compute_per_sample_lm_loss import (
 # CONFIG
 # ============================================================
 
-# ------------------------------------------------------------
-# FORWARD BATCH SIZE
-#
-# ALL HOPS USE THE SAME FORWARD BATCH SIZE.
-#
-# One ratio contains:
-#
-#     33 retrieval-decision levels
-#
-# Forward:
-#
-#     batch = 4
-# ------------------------------------------------------------
-
 FORWARD_BATCH_SIZE = 4
-
-
-# ------------------------------------------------------------
-# LOSS BATCH SIZE
-#
-# CrossEntropyLoss is ALWAYS computed one sample at a time.
-# ------------------------------------------------------------
 
 LOSS_BATCH_SIZE = 1
 
-
-# ------------------------------------------------------------
-# NUMBER OF RETRIEVAL DECISION LEVELS
-# ------------------------------------------------------------
-
 NUM_DECISION_LEVELS = 32
 
-
-# ------------------------------------------------------------
-# CSV CHECKPOINT
-# ------------------------------------------------------------
-
 SAVE_EVERY = 100
-
-
-# ------------------------------------------------------------
-# OUTPUT
-# ------------------------------------------------------------
 
 OUTPUT_DIR = Path(
     "phase_1/stage_1_hypothesis_verification/"
@@ -78,17 +42,15 @@ OUTPUT_DIR = Path(
 
 
 # ============================================================
-# CUDA MEMORY CLEANUP
+# CUDA OOM CLEANUP
 # ============================================================
 
-def _cleanup_cuda() -> None:
+def _cleanup_cuda_after_oom() -> None:
     """
-    Aggressively clean temporary CUDA memory after OOM.
+    Aggressive CUDA cleanup.
 
-    This does NOT reset the model.
-
-    It only removes Python garbage and releases cached
-    CUDA allocator blocks.
+    IMPORTANT:
+    This function is called ONLY after an OOM.
     """
 
     gc.collect()
@@ -103,9 +65,11 @@ def _cleanup_cuda() -> None:
             pass
 
 
-def _is_cuda_oom(error: BaseException) -> bool:
+def _is_cuda_oom(
+    error: BaseException,
+) -> bool:
     """
-    Return True if an exception is a CUDA OOM.
+    Detect CUDA out-of-memory errors.
     """
 
     if isinstance(
@@ -130,11 +94,6 @@ def _move_tensors_to_device(
     model_input: dict[str, Any],
     device: torch.device,
 ) -> dict[str, Any]:
-    """
-    Move tensor fields of a model-input dictionary to device.
-
-    Non-tensor fields are kept unchanged.
-    """
 
     return {
         key: value.to(device)
@@ -149,9 +108,6 @@ def _slice_model_input(
     start: int,
     end: int,
 ) -> dict[str, Any]:
-    """
-    Slice the batch dimension of a model-input dictionary.
-    """
 
     return {
         key: value[start:end]
@@ -165,16 +121,6 @@ def _make_column_name(
     ratio: tuple[int, int],
     decision_level: int,
 ) -> str:
-    """
-    Flatten a ratio + retrieval decision level into one CSV column.
-
-    Example:
-
-        ratio = (2, 1)
-        decision_level = 0
-
-        -> 2:1/0.0000
-    """
 
     decision_score = (
         decision_level / NUM_DECISION_LEVELS
@@ -189,9 +135,6 @@ def _make_column_name(
 def _parse_mode(
     mode: str,
 ) -> list[str]:
-    """
-    Convert CLI mode into the list of hops to evaluate.
-    """
 
     if mode == "2":
         return ["2-hop"]
@@ -216,7 +159,7 @@ def _parse_mode(
 
 
 # ============================================================
-# COMPUTE ONE CE LOSS
+# COMPUTE CE FOR ONE SAMPLE
 # ============================================================
 
 def _compute_single_loss(
@@ -224,33 +167,6 @@ def _compute_single_loss(
     labels_cpu: torch.Tensor,
     device: torch.device,
 ) -> float:
-    """
-    Compute CE loss for exactly ONE sample.
-
-    CPU
-      |
-      v
-    GPU
-      |
-      v
-    CrossEntropyLoss
-      |
-      v
-    scalar
-      |
-      v
-    CPU
-
-    Returns
-    -------
-    float
-        Per-sample LM loss.
-
-    Raises
-    ------
-    torch.cuda.OutOfMemoryError
-        If CE itself cannot fit.
-    """
 
     assert logits_cpu.shape[0] == 1
     assert labels_cpu.shape[0] == 1
@@ -260,10 +176,6 @@ def _compute_single_loss(
     loss = None
 
     try:
-
-        # ----------------------------------------------------
-        # Move only one sample to GPU
-        # ----------------------------------------------------
 
         logits = logits_cpu.to(
             device,
@@ -275,20 +187,12 @@ def _compute_single_loss(
             non_blocking=True,
         )
 
-        # ----------------------------------------------------
-        # CE
-        # ----------------------------------------------------
-
         with torch.inference_mode():
 
             loss = compute_per_sample_lm_loss(
                 logits=logits,
                 labels=labels,
             )
-
-        # ----------------------------------------------------
-        # Extract scalar immediately
-        # ----------------------------------------------------
 
         result = (
             loss
@@ -301,19 +205,13 @@ def _compute_single_loss(
 
     finally:
 
-        # ----------------------------------------------------
-        # ALWAYS cleanup GPU tensors
-        # ----------------------------------------------------
-
         del logits
         del labels
         del loss
 
-        _cleanup_cuda()
-
 
 # ============================================================
-# FORWARD ONE BATCH + IMMEDIATE CE
+# FORWARD BATCH + IMMEDIATE CE
 # ============================================================
 
 def _forward_and_compute_loss_batch(
@@ -324,47 +222,26 @@ def _forward_and_compute_loss_batch(
     device: torch.device,
 ) -> list[float]:
     """
-    Process ONE forward batch.
+    Forward a batch and immediately calculate CE.
 
-    Flow:
+    Normal flow:
 
         CPU input
-            |
-            v
+            ↓
         GPU
-            |
-            v
-        model forward (batch=4)
-            |
-            v
-        logits
-            |
-            +--------------------+
-            |                    |
-            v                    v
-        sample 0              sample 1
-            |                    |
-            v                    v
-           CE                   CE
-         batch=1              batch=1
-            |                    |
-            +---------+----------+
-                      |
-                      v
-                 CPU losses
+            ↓
+        forward batch=4
+            ↓
+        logits on GPU
+            ↓
+        sample 0 → CPU → CE batch=1
+        sample 1 → CPU → CE batch=1
+        sample 2 → CPU → CE batch=1
+        sample 3 → CPU → CE batch=1
+            ↓
+        losses
 
-    The important point is that the whole forward batch is
-    never sent through CE together.
-
-    Parameters
-    ----------
-    start, end:
-        Decision-level range.
-
-    Returns
-    -------
-    list[float]
-        One loss for each decision level in [start, end).
+    No CUDA cleanup is performed here during normal execution.
     """
 
     batch_input = None
@@ -373,9 +250,9 @@ def _forward_and_compute_loss_batch(
 
     try:
 
-        # ====================================================
-        # 1. SLICE CPU INPUT
-        # ====================================================
+        # ----------------------------------------------------
+        # Slice input
+        # ----------------------------------------------------
 
         batch_input = _slice_model_input(
             model_input,
@@ -383,27 +260,25 @@ def _forward_and_compute_loss_batch(
             end,
         )
 
-        actual_batch_size = (
-            end - start
-        )
+        actual_batch_size = end - start
 
         assert (
             actual_batch_size
             <= FORWARD_BATCH_SIZE
         )
 
-        # ====================================================
-        # 2. MOVE INPUT TO GPU
-        # ====================================================
+        # ----------------------------------------------------
+        # Move input to GPU
+        # ----------------------------------------------------
 
         batch_input = _move_tensors_to_device(
             batch_input,
             device,
         )
 
-        # ====================================================
-        # 3. FORWARD
-        # ====================================================
+        # ----------------------------------------------------
+        # Forward
+        # ----------------------------------------------------
 
         with torch.inference_mode():
 
@@ -422,35 +297,17 @@ def _forward_and_compute_loss_batch(
                 ],
             )
 
-            # ------------------------------------------------
-            # IMPORTANT
-            #
-            # Keep logits on GPU only while processing this
-            # forward batch.
-            # ------------------------------------------------
+            batch_logits = outputs.logits
 
-            batch_logits = (
-                outputs.logits
-            )
-
-        # ====================================================
-        # 4. CE ONE SAMPLE AT A TIME
-        # ====================================================
+        # ----------------------------------------------------
+        # CE one sample at a time
+        # ----------------------------------------------------
 
         losses: list[float] = []
 
         for local_index in range(
             actual_batch_size
         ):
-
-            # ------------------------------------------------
-            # Slice ONE sample.
-            #
-            # This creates:
-            #
-            #     [1, sequence_length, vocab]
-            #
-            # ------------------------------------------------
 
             logits_single = (
                 batch_logits[
@@ -472,21 +329,6 @@ def _forward_and_compute_loss_batch(
                 .cpu()
             )
 
-            # ------------------------------------------------
-            # Delete GPU batch logits reference before CE.
-            #
-            # The CPU copy is now independent.
-            # ------------------------------------------------
-
-            # CE receives only batch=1.
-            #
-            # Note:
-            # batch_logits itself still exists here because
-            # the remaining samples need it.
-            #
-            # The actual CE tensor is only one sample.
-            # ------------------------------------------------
-
             try:
 
                 loss_value = (
@@ -501,6 +343,38 @@ def _forward_and_compute_loss_batch(
                     loss_value
                 )
 
+            except torch.cuda.OutOfMemoryError:
+
+                # ------------------------------------------------
+                # CE itself OOMed.
+                #
+                # Cleanup and retry the same sample.
+                # ------------------------------------------------
+
+                _cleanup_cuda_after_oom()
+
+                try:
+
+                    loss_value = (
+                        _compute_single_loss(
+                            logits_cpu=logits_single,
+                            labels_cpu=labels_single,
+                            device=device,
+                        )
+                    )
+
+                    losses.append(
+                        loss_value
+                    )
+
+                except torch.cuda.OutOfMemoryError:
+
+                    _cleanup_cuda_after_oom()
+
+                    losses.append(
+                        float("nan")
+                    )
+
             finally:
 
                 del logits_single
@@ -510,19 +384,13 @@ def _forward_and_compute_loss_batch(
 
     finally:
 
-        # ====================================================
-        # 5. CLEAN GPU FORWARD TENSORS
-        # ====================================================
-
         del outputs
         del batch_logits
         del batch_input
 
-        _cleanup_cuda()
-
 
 # ============================================================
-# SAFE BATCH PROCESSING WITH OOM RECOVERY
+# SAFE FORWARD BATCH
 # ============================================================
 
 def _process_forward_batch_safe(
@@ -533,17 +401,9 @@ def _process_forward_batch_safe(
     device: torch.device,
 ) -> list[float]:
     """
-    Safely process one forward batch.
+    Try forward batch=4.
 
-    Normal case:
-
-        batch=4
-            ↓
-        forward
-            ↓
-        CE x4
-
-    If batch=4 causes OOM:
+    If OOM:
 
         batch=4
             ↓
@@ -551,10 +411,9 @@ def _process_forward_batch_safe(
             ↓
         cleanup
             ↓
-        retry each sample individually
+        retry each decision with batch=1
 
-    This means a temporary OOM does NOT kill the entire
-    evaluation.
+    No printing here.
     """
 
     try:
@@ -567,28 +426,15 @@ def _process_forward_batch_safe(
             device=device,
         )
 
-    except torch.cuda.OutOfMemoryError as error:
+    except torch.cuda.OutOfMemoryError:
 
-        print(
-            f"      ⚠ CUDA OOM "
-            f"during forward/CE "
-            f"[decision {start}:{end}]",
-            flush=True,
-        )
-
-        print(
-            "        Cleaning CUDA memory and "
-            "retrying this batch with forward batch=1...",
-            flush=True,
-        )
-
-        _cleanup_cuda()
-
-        # ====================================================
-        # RETRY EACH DECISION LEVEL INDIVIDUALLY
-        # ====================================================
+        _cleanup_cuda_after_oom()
 
         recovered_losses: list[float] = []
+
+        # ----------------------------------------------------
+        # Retry every decision individually
+        # ----------------------------------------------------
 
         for index in range(
             start,
@@ -617,21 +463,18 @@ def _process_forward_batch_safe(
 
             except torch.cuda.OutOfMemoryError:
 
-                print(
-                    f"        ✗ OOM even at "
-                    f"forward batch=1 "
-                    f"for decision {index}",
-                    flush=True,
+                _cleanup_cuda_after_oom()
+
+                recovered_losses.append(
+                    float("nan")
                 )
 
-                _cleanup_cuda()
+            except RuntimeError as error:
 
-                # ------------------------------------------------
-                # We cannot calculate this sample.
-                #
-                # Use NaN rather than silently pretending the
-                # result is valid.
-                # ------------------------------------------------
+                if not _is_cuda_oom(error):
+                    raise
+
+                _cleanup_cuda_after_oom()
 
                 recovered_losses.append(
                     float("nan")
@@ -644,15 +487,13 @@ def _process_forward_batch_safe(
         if not _is_cuda_oom(error):
             raise
 
-        print(
-            f"      ⚠ CUDA OOM "
-            f"[decision {start}:{end}]",
-            flush=True,
-        )
-
-        _cleanup_cuda()
+        _cleanup_cuda_after_oom()
 
         recovered_losses: list[float] = []
+
+        # ----------------------------------------------------
+        # Retry every decision individually
+        # ----------------------------------------------------
 
         for index in range(
             start,
@@ -671,8 +512,20 @@ def _process_forward_batch_safe(
                     )
                 )
 
+                assert len(
+                    single_losses
+                ) == 1
+
                 recovered_losses.extend(
                     single_losses
+                )
+
+            except torch.cuda.OutOfMemoryError:
+
+                _cleanup_cuda_after_oom()
+
+                recovered_losses.append(
+                    float("nan")
                 )
 
             except RuntimeError as single_error:
@@ -682,14 +535,7 @@ def _process_forward_batch_safe(
                 ):
                     raise
 
-                print(
-                    f"        ✗ OOM even at "
-                    f"forward batch=1 "
-                    f"for decision {index}",
-                    flush=True,
-                )
-
-                _cleanup_cuda()
+                _cleanup_cuda_after_oom()
 
                 recovered_losses.append(
                     float("nan")
@@ -708,7 +554,7 @@ def _compute_ratio_losses(
     device: torch.device,
 ) -> list[float]:
     """
-    Compute LM loss for one ratio.
+    Compute all 33 retrieval-decision losses.
 
     Forward:
 
@@ -718,33 +564,24 @@ def _compute_ratio_losses(
 
         batch = 1
 
-    Flow:
+    Sequence:
 
         0 1 2 3
-        └── forward ──┐
-                      ├─ CE(0)
-                      ├─ CE(1)
-                      ├─ CE(2)
-                      └─ CE(3)
+            forward
+            CE(0)
+            CE(1)
+            CE(2)
+            CE(3)
 
         4 5 6 7
-        └── forward ──┐
-                      ├─ CE(4)
-                      ├─ CE(5)
-                      ├─ CE(6)
-                      └─ CE(7)
+            forward
+            CE(4)
+            CE(5)
+            CE(6)
+            CE(7)
 
         ...
 
-    OOM recovery:
-
-        forward batch=4
-              ↓
-             OOM
-              ↓
-        cleanup
-              ↓
-        retry 4 samples as batch=1
     """
 
     num_samples = (
@@ -765,9 +602,9 @@ def _compute_ratio_losses(
 
     ratio_losses: list[float] = []
 
-    # ========================================================
-    # FORWARD BATCHES
-    # ========================================================
+    # --------------------------------------------------------
+    # Process forward batches
+    # --------------------------------------------------------
 
     for start in range(
         0,
@@ -778,13 +615,6 @@ def _compute_ratio_losses(
         end = min(
             start + FORWARD_BATCH_SIZE,
             num_samples,
-        )
-
-        print(
-            f"      decisions "
-            f"{start:02d}:{end:02d} "
-            f"(forward batch={end - start})",
-            flush=True,
         )
 
         batch_losses = (
@@ -810,15 +640,9 @@ def _compute_ratio_losses(
             batch_losses
         )
 
-        # ----------------------------------------------------
-        # Cleanup between forward batches.
-        # ----------------------------------------------------
-
-        _cleanup_cuda()
-
-    # ========================================================
-    # FINAL CHECK
-    # ========================================================
+    # --------------------------------------------------------
+    # Final sanity check
+    # --------------------------------------------------------
 
     assert (
         len(ratio_losses)
@@ -833,22 +657,12 @@ def _compute_ratio_losses(
 
 
 # ============================================================
-# CREATE GLOBAL CSV SCHEMA
+# GLOBAL CSV SCHEMA
 # ============================================================
 
 def _build_global_schema(
     datasets: dict[str, list[dict[str, Any]]],
 ) -> list[tuple[int, int]]:
-    """
-    Collect the union of all ratios appearing in the
-    selected validation datasets.
-    """
-
-    print()
-    print(
-        "Building global CSV schema...",
-        flush=True,
-    )
 
     all_ratios: list[tuple[int, int]] = []
 
@@ -856,10 +670,7 @@ def _build_global_schema(
 
         for sample in samples:
 
-            assert "id" in sample, (
-                "Every sample must contain "
-                "an 'id' field."
-            )
+            assert "id" in sample
 
             sample_ratios = (
                 create_lm_loss_samples(
@@ -875,7 +686,7 @@ def _build_global_schema(
                         ratio
                     )
 
-    all_ratios = sorted(
+    return sorted(
         all_ratios,
         key=lambda x: (
             -x[0],
@@ -883,19 +694,14 @@ def _build_global_schema(
         ),
     )
 
-    return all_ratios
-
 
 # ============================================================
-# CREATE CSV HEADER
+# CSV HEADER
 # ============================================================
 
 def _build_fieldnames(
     all_ratios: list[tuple[int, int]],
 ) -> list[str]:
-    """
-    Build the complete CSV schema.
-    """
 
     all_columns = [
         _make_column_name(
@@ -915,7 +721,7 @@ def _build_fieldnames(
 
 
 # ============================================================
-# CREATE ONE CSV ROW
+# EVALUATE ONE SAMPLE
 # ============================================================
 
 def _evaluate_one_sample(
@@ -927,38 +733,16 @@ def _evaluate_one_sample(
     all_columns: list[str],
     device: torch.device,
 ) -> dict[str, Any]:
-    """
-    Evaluate one dataset sample across:
 
-        ratio
-            -> 33 retrieval decision levels
-
-    For every ratio:
-
-        forward batch = 4
-        CE batch      = 1
-    """
-
-    assert "id" in sample, (
-        f"{hop} sample {sample_index} "
-        "does not contain an 'id' field."
-    )
+    assert "id" in sample
 
     sample_id = sample["id"]
-
-    # --------------------------------------------------------
-    # Create LM-loss samples
-    # --------------------------------------------------------
 
     lm_loss_samples = (
         create_lm_loss_samples(
             sample
         )
     )
-
-    # --------------------------------------------------------
-    # Initialize CSV row
-    # --------------------------------------------------------
 
     row = {
         column: ""
@@ -968,22 +752,13 @@ def _evaluate_one_sample(
     row["sample_id"] = sample_id
     row["sample_index"] = sample_index
 
-    # ========================================================
-    # PROCESS EVERY RATIO
-    # ========================================================
+    # --------------------------------------------------------
+    # Every document ratio
+    # --------------------------------------------------------
 
     for ratio, lm_sample in (
         lm_loss_samples.items()
     ):
-
-        print(
-            f"    ratio={ratio[0]}:{ratio[1]}",
-            flush=True,
-        )
-
-        # ----------------------------------------------------
-        # Create 33 decision-level inputs
-        # ----------------------------------------------------
 
         model_input = (
             create_model_input_for_lm_loss(
@@ -991,10 +766,6 @@ def _evaluate_one_sample(
                 tokenizer,
             )
         )
-
-        # ----------------------------------------------------
-        # Sanity check
-        # ----------------------------------------------------
 
         num_decisions = (
             model_input[
@@ -1014,10 +785,6 @@ def _evaluate_one_sample(
             f"{NUM_DECISION_LEVELS + 1}"
         )
 
-        # ====================================================
-        # FORWARD BATCH=4 + IMMEDIATE CE BATCH=1
-        # ====================================================
-
         ratio_losses = (
             _compute_ratio_losses(
                 model=model,
@@ -1027,7 +794,7 @@ def _evaluate_one_sample(
         )
 
         # ----------------------------------------------------
-        # Store losses
+        # Store
         # ----------------------------------------------------
 
         for decision_level, loss in enumerate(
@@ -1041,25 +808,17 @@ def _evaluate_one_sample(
 
             row[column] = loss
 
-        # ----------------------------------------------------
-        # Cleanup
-        # ----------------------------------------------------
-
         del model_input
         del lm_sample
         del ratio_losses
 
-        _cleanup_cuda()
-
     del lm_loss_samples
-
-    _cleanup_cuda()
 
     return row
 
 
 # ============================================================
-# SAVE CSV CHUNK
+# CSV
 # ============================================================
 
 def _append_rows_to_csv(
@@ -1067,9 +826,6 @@ def _append_rows_to_csv(
     fieldnames: list[str],
     rows: list[dict[str, Any]],
 ) -> None:
-    """
-    Append a chunk of rows to CSV.
-    """
 
     if not rows:
         return
@@ -1090,17 +846,10 @@ def _append_rows_to_csv(
         f.flush()
 
 
-# ============================================================
-# INITIALIZE CSV
-# ============================================================
-
 def _initialize_csv(
     output_path: Path,
     fieldnames: list[str],
 ) -> None:
-    """
-    Create / overwrite a CSV and write its header.
-    """
 
     with output_path.open(
         "w",
@@ -1117,7 +866,7 @@ def _initialize_csv(
 
 
 # ============================================================
-# MAIN EVALUATION FUNCTION
+# MAIN EVALUATION
 # ============================================================
 
 def run_lm_loss_evaluation(
@@ -1126,32 +875,6 @@ def run_lm_loss_evaluation(
     mode: str = "full",
     output_dir: str | Path = OUTPUT_DIR,
 ) -> dict[str, Path]:
-    """
-    Compute per-sample LM loss across:
-
-        hop
-            -> sample
-                -> document ratio
-                    -> retrieval decision 0/32 ... 32/32
-
-    Forward:
-
-        batch = 4 for ALL hops
-
-    Cross entropy:
-
-        batch = 1
-
-    OOM:
-
-        forward batch=4
-            ↓
-           OOM
-            ↓
-        cleanup
-            ↓
-        retry each sample with batch=1
-    """
 
     output_dir = Path(
         output_dir
@@ -1178,81 +901,15 @@ def run_lm_loss_evaluation(
         model.parameters()
     ).device
 
-    # ========================================================
-    # MODEL MODE
-    # ========================================================
-
     model.eval()
-
-    # ========================================================
-    # HEADER
-    # ========================================================
-
-    print()
-    print("=" * 100)
-    print("ART — LM LOSS EVALUATION")
-    print("=" * 100)
-
-    print(
-        f"Mode              : {mode}"
-    )
-
-    print(
-        f"Device            : {device}"
-    )
-
-    print(
-        "Selected hops      : "
-        + ", ".join(
-            selected_hops
-        )
-    )
-
-    print(
-        f"Forward batch size : "
-        f"{FORWARD_BATCH_SIZE}"
-    )
-
-    print(
-        f"Loss batch size    : "
-        f"{LOSS_BATCH_SIZE}"
-    )
-
-    print(
-        f"Decision levels    : "
-        f"0/{NUM_DECISION_LEVELS} ... "
-        f"{NUM_DECISION_LEVELS}/"
-        f"{NUM_DECISION_LEVELS}"
-    )
-
-    print(
-        f"Save every         : "
-        f"{SAVE_EVERY} samples"
-    )
-
-    print(
-        f"Output directory   : "
-        f"{output_dir}"
-    )
-
-    print()
 
     # ========================================================
     # LOAD DATASET
     # ========================================================
 
-    print(
-        "Loading validation dataset...",
-        flush=True,
-    )
-
     all_datasets = (
         load_teacher_generated_hypothesis_validation()
     )
-
-    # ========================================================
-    # SELECT DATASETS
-    # ========================================================
 
     datasets = {}
 
@@ -1274,34 +931,12 @@ def run_lm_loss_evaluation(
     del all_datasets
 
     # ========================================================
-    # DATASET SUMMARY
+    # TOTAL SAMPLES
     # ========================================================
 
-    print()
-    print("Dataset:")
-
-    total_samples = 0
-
-    for hop, samples in (
-        datasets.items()
-    ):
-
-        print(
-            f"  {hop:<8}: "
-            f"{len(samples):,} samples "
-            f"(forward batch="
-            f"{FORWARD_BATCH_SIZE}, "
-            f"loss batch="
-            f"{LOSS_BATCH_SIZE})"
-        )
-
-        total_samples += len(
-            samples
-        )
-
-    print(
-        f"  {'TOTAL':<8}: "
-        f"{total_samples:,} samples"
+    total_samples = sum(
+        len(samples)
+        for samples in datasets.values()
     )
 
     # ========================================================
@@ -1330,19 +965,6 @@ def run_lm_loss_evaluation(
         "sample_index",
     ] + all_columns
 
-    print(
-        "Ratios:",
-        [
-            f"{p}:{n}"
-            for p, n in all_ratios
-        ],
-    )
-
-    print(
-        f"LM-loss columns: "
-        f"{len(all_columns):,}"
-    )
-
     # ========================================================
     # OUTPUT PATHS
     # ========================================================
@@ -1351,24 +973,20 @@ def run_lm_loss_evaluation(
 
     for hop in selected_hops:
 
-        output_path = (
+        output_paths[hop] = (
             output_dir
             / f"lm_loss_"
             f"{hop.replace('-', '_')}.csv"
         )
 
-        output_paths[hop] = (
-            output_path
-        )
-
     # ========================================================
-    # GLOBAL PROGRESS
+    # PROGRESS
     # ========================================================
 
     processed_samples = 0
 
     # ========================================================
-    # LOOP OVER HOPS
+    # HOPS
     # ========================================================
 
     for hop, samples in (
@@ -1379,68 +997,36 @@ def run_lm_loss_evaluation(
             output_paths[hop]
         )
 
-        # ----------------------------------------------------
-        # Initialize CSV
-        # ----------------------------------------------------
-
         _initialize_csv(
             output_path,
             fieldnames,
         )
-
-        print()
-        print("=" * 100)
-        print(
-            f"{hop.upper()} — "
-            f"{len(samples):,} SAMPLES "
-            f"| FORWARD BATCH = "
-            f"{FORWARD_BATCH_SIZE} "
-            f"| LOSS BATCH = "
-            f"{LOSS_BATCH_SIZE}"
-        )
-        print("=" * 100)
-
-        print(
-            f"Output: {output_path}"
-        )
-
-        print()
-
-        # ----------------------------------------------------
-        # Checkpoint buffer
-        # ----------------------------------------------------
 
         rows_buffer: list[
             dict[str, Any]
         ] = []
 
         # ====================================================
-        # LOOP OVER SAMPLES
+        # SAMPLES
         # ====================================================
 
         for sample_index, sample in enumerate(
             samples
         ):
 
-            assert "id" in sample, (
-                f"{hop} sample "
-                f"{sample_index} "
-                "does not contain "
-                "an 'id' field."
-            )
+            assert "id" in sample
 
-            sample_id = sample[
-                "id"
-            ]
+            sample_id = sample["id"]
 
             # ------------------------------------------------
-            # Progress
+            # ONLY SAMPLE-LEVEL PROGRESS
             # ------------------------------------------------
 
             print(
                 f"[{processed_samples + 1:,}/"
                 f"{total_samples:,}] "
-                f"{hop} | sample "
+                f"{hop} | "
+                f"sample "
                 f"{sample_index + 1:,}/"
                 f"{len(samples):,} | "
                 f"id={sample_id}",
@@ -1451,57 +1037,15 @@ def run_lm_loss_evaluation(
             # Evaluate
             # ------------------------------------------------
 
-            try:
-
-                row = (
-                    _evaluate_one_sample(
-                        model=model,
-                        tokenizer=tokenizer,
-                        sample=sample,
-                        sample_index=sample_index,
-                        hop=hop,
-                        all_columns=all_columns,
-                        device=device,
-                    )
-                )
-
-            except torch.cuda.OutOfMemoryError:
-
-                # ------------------------------------------------
-                # This should normally NOT happen because every
-                # individual batch already has OOM recovery.
-                #
-                # But keep this outer safety net.
-                # ------------------------------------------------
-
-                print(
-                    f"    ⚠ Unexpected OOM at "
-                    f"{hop} sample "
-                    f"{sample_index}. "
-                    f"Cleaning CUDA and skipping sample.",
-                    flush=True,
-                )
-
-                _cleanup_cuda()
-
-                # Create an empty row so CSV alignment
-                # remains valid.
-                row = {
-                    column: ""
-                    for column in all_columns
-                }
-
-                row["sample_id"] = (
-                    sample_id
-                )
-
-                row["sample_index"] = (
-                    sample_index
-                )
-
-            # ------------------------------------------------
-            # Store
-            # ------------------------------------------------
+            row = _evaluate_one_sample(
+                model=model,
+                tokenizer=tokenizer,
+                sample=sample,
+                sample_index=sample_index,
+                hop=hop,
+                all_columns=all_columns,
+                device=device,
+            )
 
             rows_buffer.append(
                 row
@@ -1510,8 +1054,7 @@ def run_lm_loss_evaluation(
             processed_samples += 1
 
             print(
-                f"    ✓ complete | "
-                f"id={sample_id}",
+                f"    ✓ complete",
                 flush=True,
             )
 
@@ -1531,19 +1074,16 @@ def run_lm_loss_evaluation(
                 )
 
                 print(
-                    f"    💾 checkpoint saved | "
-                    f"{len(rows_buffer)} samples | "
-                    f"total processed="
-                    f"{processed_samples:,}",
+                    f"    💾 checkpoint | "
+                    f"{processed_samples:,}/"
+                    f"{total_samples:,}",
                     flush=True,
                 )
 
                 rows_buffer.clear()
 
-                _cleanup_cuda()
-
         # ====================================================
-        # SAVE REMAINING
+        # FINAL SAVE
         # ====================================================
 
         if rows_buffer:
@@ -1554,68 +1094,27 @@ def run_lm_loss_evaluation(
                 rows=rows_buffer,
             )
 
-            print(
-                f"    💾 final checkpoint saved | "
-                f"{len(rows_buffer)} samples",
-                flush=True,
-            )
-
             rows_buffer.clear()
 
         # ====================================================
-        # HOP SUMMARY
+        # HOP COMPLETE
         # ====================================================
 
-        print()
         print(
-            f"✓ {hop.upper()} COMPLETE"
-        )
-
-        print(
-            f"  Samples       : "
-            f"{len(samples):,}"
-        )
-
-        print(
-            f"  Forward batch : "
-            f"{FORWARD_BATCH_SIZE}"
-        )
-
-        print(
-            f"  Loss batch    : "
-            f"{LOSS_BATCH_SIZE}"
-        )
-
-        print(
-            f"  Saved         : "
-            f"{output_path}"
+            f"✓ {hop} complete | "
+            f"{len(samples):,} samples",
+            flush=True,
         )
 
     # ========================================================
     # FINAL
     # ========================================================
 
-    print()
-    print("=" * 100)
-    print("LM LOSS EVALUATION COMPLETE")
-    print("=" * 100)
-
     print(
-        f"Total samples processed: "
-        f"{processed_samples:,}"
+        f"✓ evaluation complete | "
+        f"{processed_samples:,}/{total_samples:,} samples",
+        flush=True,
     )
-
-    print()
-
-    for hop in selected_hops:
-
-        print(
-            f"{hop:<8} → "
-            f"{output_paths[hop]}"
-        )
-
-    print()
-    print("=" * 100)
 
     return output_paths
 
@@ -1667,10 +1166,6 @@ if __name__ == "__main__":
         AutoTokenizer,
     )
 
-    # ========================================================
-    # CONFIG
-    # ========================================================
-
     MODEL_NAME = (
         "Qwen/Qwen3-4B"
     )
@@ -1684,9 +1179,10 @@ if __name__ == "__main__":
     # TOKENIZER
     # ========================================================
 
-    print("=" * 80)
-    print("LOADING TOKENIZER")
-    print("=" * 80)
+    print(
+        "Loading tokenizer...",
+        flush=True,
+    )
 
     tokenizer = (
         AutoTokenizer.from_pretrained(
@@ -1694,18 +1190,14 @@ if __name__ == "__main__":
         )
     )
 
-    print(
-        f"Tokenizer: {MODEL_NAME}"
-    )
-
     # ========================================================
     # MODEL
     # ========================================================
 
-    print()
-    print("=" * 80)
-    print("LOADING MODEL")
-    print("=" * 80)
+    print(
+        "Loading model...",
+        flush=True,
+    )
 
     probe = (
         AutoModelForCausalLM.from_pretrained(
@@ -1721,36 +1213,14 @@ if __name__ == "__main__":
         )
     )
 
-    # ========================================================
-    # MODEL CHECK
-    # ========================================================
-
-    print()
-    print("=" * 80)
-    print("MODEL LOADED")
-    print("=" * 80)
-
     print(
-        f"Model           : "
-        f"{HF_REPO}"
-    )
-
-    print(
-        f"Parameter device: "
-        f"{next(probe.parameters()).device}"
+        "Model loaded.",
+        flush=True,
     )
 
     # ========================================================
     # RUN
     # ========================================================
-
-    print()
-    print("=" * 80)
-    print(
-        f"STARTING LM-LOSS EVALUATION "
-        f"(MODE = {args.mode})"
-    )
-    print("=" * 80)
 
     results = (
         run_lm_loss_evaluation(
@@ -1762,19 +1232,14 @@ if __name__ == "__main__":
     )
 
     # ========================================================
-    # FINAL
+    # FINAL OUTPUT
     # ========================================================
-
-    print()
-    print("=" * 80)
-    print("ALL DONE")
-    print("=" * 80)
 
     for hop, output_path in (
         results.items()
     ):
 
         print(
-            f"{hop:<8} → "
-            f"{output_path}"
+            f"{hop:<8} → {output_path}",
+            flush=True,
         )
