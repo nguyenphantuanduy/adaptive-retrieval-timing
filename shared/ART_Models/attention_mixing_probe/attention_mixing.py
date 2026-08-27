@@ -234,6 +234,8 @@ class AttentionMixingProbeAttention(Qwen3Attention):
             )
         )
 
+        value_states_with_doc = value_states
+        
         if past_key_values is not None:
 
             key_states_with_doc, value_states_with_doc = (
