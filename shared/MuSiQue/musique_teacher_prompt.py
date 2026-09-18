@@ -1,7 +1,3 @@
-# ============================================================
-# Teacher Prompt Builder
-# ============================================================
-
 from .musique_sample import (
     MuSiQueSample,
     Document,
@@ -9,16 +5,66 @@ from .musique_sample import (
 )
 
 
+# ============================================================
+# TEACHER PROMPT BUILDER
+# ============================================================
+
 def create_teacher_prompt(
     sample: MuSiQueSample,
-) -> dict[str, str]:
+) -> str:
+    """
+    Create an instruction prompt for teacher-model reasoning generation.
 
-    system_prompt = """
+    The teacher receives:
+        - question
+        - target answer
+        - golden documents
+        - reasoning instruction
+
+    The reasoning instruction is provided by the MuSiQueSample
+    itself.
+
+    Document references MUST use the exact document title.
+    """
+
+    # ========================================================
+    # 1. BUILD GOLDEN DOCUMENT SECTION
+    # ========================================================
+
+    document_sections = []
+
+    for document in sample.golden_document:
+
+        document_sections.append(
+            f"[GOLDEN DOCUMENT]\n"
+            f"Title: {document.title}\n"
+            f"{document.content}\n"
+            f"[END DOCUMENT]"
+        )
+
+    documents_text = "\n\n".join(
+        document_sections
+    )
+
+    # ========================================================
+    # 2. GET REASONING INSTRUCTION FROM SAMPLE
+    # ========================================================
+
+    reasoning_instruction = sample.reasoning_instruction
+
+    # ========================================================
+    # 3. BUILD PROMPT
+    # ========================================================
+
+    prompt = f"""
 You are a reasoning teacher generating high-quality reasoning
 data for a retrieval-augmented language model.
 
-Your task is to solve questions by reasoning over the
+Your task is to solve the question below by reasoning over the
 provided documents.
+
+The target answer is provided intentionally as supervision for
+this teacher-generation process.
 
 IMPORTANT:
 
@@ -27,7 +73,6 @@ IMPORTANT:
   answer.
 - Do NOT simply explain the answer directly.
 - Start from the original question.
-- Do NOT restate, repeat, or paraphrase the original question.
 - Determine what information is required.
 - Identify the relevant evidence.
 - Connect intermediate facts when the question requires
@@ -48,40 +93,10 @@ The final answer should be concise and appear at the end in
 exactly this form:
 
 <answer>
+<short answer>
 </answer>
-""".strip()
 
-    # --------------------------------------------------------
-    # Golden documents
-    # --------------------------------------------------------
 
-    document_sections = []
-
-    for document in sample.golden_document:
-        document_sections.append(
-            f"[GOLDEN DOCUMENT]\n"
-            f"Title: {document.title}\n"
-            f"{document.content}\n"
-            f"[END DOCUMENT]"
-        )
-
-    documents_text = "\n\n".join(
-        document_sections
-    )
-
-    # --------------------------------------------------------
-    # Reasoning instruction
-    # --------------------------------------------------------
-
-    reasoning_instruction = (
-        sample.reasoning_instruction
-    )
-
-    # --------------------------------------------------------
-    # User prompt
-    # --------------------------------------------------------
-
-    user_prompt = f"""
 ============================================================
 QUESTION
 ============================================================
@@ -121,114 +136,328 @@ Reason through the question step by step.
 
 Use the provided reasoning instruction to guide the reasoning.
 
+Start from the original question.
+
+Determine what information is required.
+
+Identify the relevant evidence in the provided documents.
+
+Follow the necessary information dependencies between
+intermediate facts.
+
+For multi-hop questions, clearly connect the intermediate
+answers so that the final answer follows naturally from them.
+
+When referring to evidence, identify the source using its exact
+document Title.
+
+Do not refer to documents using positional names such as
+"Document 1" or "Document 2".
+
+Do not mention that the answer was provided as supervision.
+Do not mention the dataset, annotations, or these instructions
+in the reasoning.
+
+Write a natural, coherent reasoning process.
+
 At the end, provide the concise final answer using exactly:
 
-<answer>
-</answer>
+Answer: <short answer>
 """.strip()
 
-    return {
-        "system": system_prompt,
-        "user": user_prompt,
-    }
+    return prompt
 
 
 # ============================================================
-# MAIN — TEST
+# TEST
 # ============================================================
 
-if __name__ == "__main__":
+def test_create_teacher_prompt():
+    """
+    Test teacher prompt generation using the first MuSiQue-Ans
+    development sample.
+    """
+
+    print("=" * 80)
+    print("TEST — MUSIQUE TEACHER PROMPT GENERATION")
+    print("=" * 80)
+
+    # ========================================================
+    # 1. LOAD ONE MUSIQUE SAMPLE
+    # ========================================================
 
     from .load_dataset import load_musique_ans
-    from .musique_sample import MuSiQueSampleConverter
-
-    # ========================================================
-    # LOAD MuSiQue
-    # ========================================================
 
     dataset = load_musique_ans()
 
-    # ========================================================
-    # GET FIRST DEV SAMPLE
-    # ========================================================
-
     raw_sample = dataset["dev"][0]
 
+    print()
+    print("✓ MuSiQue sample loaded")
+
     # ========================================================
-    # CONVERT SAMPLE
+    # 2. CONVERT SAMPLE
     # ========================================================
 
-    sample = MuSiQueSampleConverter.from_musique(
-        raw_sample
+    sample = (
+        MuSiQueSampleConverter.from_musique(
+            raw_sample
+        )
+    )
+
+    print("✓ Sample converted")
+
+    # ========================================================
+    # 3. CREATE TEACHER PROMPT
+    # ========================================================
+
+    prompt = create_teacher_prompt(
+        sample=sample,
+    )
+
+    assert isinstance(
+        prompt,
+        str,
+    )
+
+    assert len(prompt) > 0
+
+    print("✓ Teacher prompt created")
+
+    # ========================================================
+    # 4. QUESTION
+    # ========================================================
+
+    assert (
+        sample.question
+        in prompt
     )
 
     # ========================================================
-    # CREATE TEACHER PROMPT
+    # 5. TARGET ANSWER
     # ========================================================
 
-    prompts = create_teacher_prompt(
-        sample
+    assert (
+        sample.answer
+        in prompt
     )
 
     # ========================================================
-    # PRINT SAMPLE INFO
+    # 6. REASONING INSTRUCTION
     # ========================================================
 
-    print("\n" + "=" * 80)
-    print("SAMPLE")
+    assert (
+        "REASONING INSTRUCTION"
+        in prompt
+    )
+
+    assert (
+        sample.reasoning_instruction
+        in prompt
+    )
+
+    # ========================================================
+    # 7. QUESTION DECOMPOSITION MUST NOT BE INCLUDED
+    # ========================================================
+
+    assert (
+        "QUESTION DECOMPOSITION"
+        not in prompt
+    )
+
+    assert (
+        "decomposition_text"
+        not in prompt
+    )
+
+    # ========================================================
+    # 8. GOLDEN DOCUMENTS
+    # ========================================================
+
+    for document in sample.golden_document:
+
+        # ----------------------------------------------------
+        # Title must exist
+        # ----------------------------------------------------
+
+        assert (
+            document.title
+            in prompt
+        )
+
+        # ----------------------------------------------------
+        # Content must exist
+        # ----------------------------------------------------
+
+        assert (
+            document.content
+            in prompt
+        )
+
+        # ----------------------------------------------------
+        # Exact document section must exist
+        # ----------------------------------------------------
+
+        expected_section = (
+            "[GOLDEN DOCUMENT]\n"
+            f"Title: {document.title}\n"
+            f"{document.content}\n"
+            "[END DOCUMENT]"
+        )
+
+        assert (
+            expected_section
+            in prompt
+        )
+
+    # ========================================================
+    # 9. NO DISTRACTOR DOCUMENTS
+    # ========================================================
+
+    assert (
+        "[DISTRACTOR DOCUMENT]"
+        not in prompt
+    )
+
+    # ========================================================
+    # 10. DOCUMENT REFERENCE INSTRUCTIONS
+    # ========================================================
+
+    assert (
+        "ALWAYS use its exact Title"
+        in prompt
+    )
+
+    assert (
+        'NEVER refer to documents as "Document 1", '
+        '"Document 2", etc.'
+        in prompt
+    )
+
+    # ========================================================
+    # 11. ANSWER FORMAT
+    # ========================================================
+
+    assert (
+        "Answer: <short answer>"
+        in prompt
+    )
+
+    # ========================================================
+    # 12. SECTION ORDER
+    # ========================================================
+
+    question_pos = prompt.index(
+        "QUESTION"
+    )
+
+    target_answer_pos = prompt.index(
+        "TARGET ANSWER"
+    )
+
+    golden_documents_pos = prompt.index(
+        "GOLDEN DOCUMENTS"
+    )
+
+    reasoning_instruction_pos = prompt.index(
+        "REASONING INSTRUCTION"
+    )
+
+    task_pos = prompt.index(
+        "TASK"
+    )
+
+    assert (
+        question_pos
+        < target_answer_pos
+        < golden_documents_pos
+        < reasoning_instruction_pos
+        < task_pos
+    )
+
+    # ========================================================
+    # 13. PRINT GENERATED PROMPT
+    # ========================================================
+
+    print()
+    print("=" * 80)
+    print("GENERATED TEACHER PROMPT")
+    print("=" * 80)
+
+    print(prompt)
+
+    # ========================================================
+    # 14. SUMMARY
+    # ========================================================
+
+    print()
+    print("=" * 80)
+    print("SUMMARY")
     print("=" * 80)
 
     print(
-        f"Question      : {sample.question}"
+        f"Question             : "
+        f"{sample.question}"
     )
 
     print(
-        f"Target answer : {sample.answer}"
+        f"Answer               : "
+        f"{sample.answer}"
     )
 
     print(
-        f"Golden docs   : "
+        f"Reasoning steps      : "
+        f"{len(sample.question_decomposition)}"
+    )
+
+    print(
+        f"Golden documents     : "
         f"{len(sample.golden_document)}"
     )
 
     print(
-        f"Distractor    : "
-        f"{len(sample.distract_document)}"
+        f"Prompt length        : "
+        f"{len(prompt)} characters"
+    )
+
+    print()
+
+    print(
+        "✓ Reasoning instruction loaded from MuSiQueSample"
     )
 
     print(
-        f"Reasoning steps: "
-        f"{len(sample.question_decomposition)}"
+        "✓ Question decomposition NOT included"
     )
-
-    # ========================================================
-    # PRINT SYSTEM PROMPT
-    # ========================================================
-
-    print("\n" + "=" * 80)
-    print("SYSTEM PROMPT")
-    print("=" * 80)
 
     print(
-        prompts["system"]
+        "✓ Golden documents included and validated"
     )
-
-    # ========================================================
-    # PRINT USER PROMPT
-    # ========================================================
-
-    print("\n" + "=" * 80)
-    print("USER PROMPT")
-    print("=" * 80)
 
     print(
-        prompts["user"]
+        "✓ No distractor documents included"
     )
 
-    # ========================================================
-    # DONE
-    # ========================================================
+    print(
+        "✓ Document reference instructions validated"
+    )
 
-    print("\n" + "=" * 80)
-    print("DONE")
-    print("=" * 80)
+    print(
+        "✓ Reasoning instruction included"
+    )
+
+    print(
+        "✓ Target answer included"
+    )
+
+    print(
+        "✓ Section ordering validated"
+    )
+
+    print()
+    print(
+        "✓ MUSIQUE TEACHER PROMPT TEST PASSED"
+    )
+
+if __name__ == "__main__":
+    test_create_teacher_prompt()
