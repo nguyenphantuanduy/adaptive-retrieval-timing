@@ -5,7 +5,6 @@
 # ============================================================
 
 import gc
-from pathlib import Path
 
 import torch
 from transformers import (
@@ -112,7 +111,7 @@ def load_teacher_model():
     )
 
     print(
-        f"  Device map: auto"
+        "  Device map: auto"
     )
 
     if torch.cuda.is_available():
@@ -275,60 +274,47 @@ def test_single_sample():
     )
 
     # ========================================================
-    # 7. PRINT SYSTEM PROMPT
+    # 7. PRINT TEACHER PROMPT
     # ========================================================
 
     print()
     print("=" * 80)
-    print("SYSTEM PROMPT")
-    print("=" * 80)
-
-    print()
-
-    print(
-        teacher_prompt[
-            "system"
-        ]
-    )
-
-    # ========================================================
-    # 8. PRINT USER PROMPT
-    # ========================================================
-
-    print()
-    print("=" * 80)
-    print("USER PROMPT")
+    print("TEACHER PROMPT")
     print("=" * 80)
 
     print()
 
     print(
-        teacher_prompt[
-            "user"
-        ]
+        teacher_prompt
     )
 
     # ========================================================
-    # 9. BUILD CHAT MESSAGES
+    # 8. BUILD CHAT MESSAGES
     # ========================================================
+
+    # --------------------------------------------------------
+    # The teacher prompt is intentionally provided entirely
+    # as the user message.
+    #
+    # The prompt itself contains:
+    #   - role / task description
+    #   - reasoning rules
+    #   - question
+    #   - target answer
+    #   - golden documents
+    #   - reasoning instruction
+    #   - output format
+    # --------------------------------------------------------
 
     messages = [
         {
-            "role": "system",
-            "content": teacher_prompt[
-                "system"
-            ],
-        },
-        {
             "role": "user",
-            "content": teacher_prompt[
-                "user"
-            ],
+            "content": teacher_prompt,
         },
     ]
 
     # ========================================================
-    # 10. APPLY CHAT TEMPLATE
+    # 9. APPLY CHAT TEMPLATE
     # ========================================================
 
     text = tokenizer.apply_chat_template(
@@ -339,7 +325,7 @@ def test_single_sample():
     )
 
     # ========================================================
-    # 11. PRINT FINAL MODEL INPUT
+    # 10. PRINT FINAL MODEL INPUT
     # ========================================================
 
     print()
@@ -349,10 +335,12 @@ def test_single_sample():
 
     print()
 
-    print(text)
+    print(
+        text
+    )
 
     # ========================================================
-    # 12. TOKENIZE
+    # 11. TOKENIZE
     # ========================================================
 
     inputs = tokenizer(
@@ -389,7 +377,7 @@ def test_single_sample():
     )
 
     # ========================================================
-    # 13. GENERATE
+    # 12. GENERATE
     # ========================================================
 
     print()
@@ -418,7 +406,7 @@ def test_single_sample():
         )
 
     # ========================================================
-    # 14. EXTRACT GENERATED TOKENS
+    # 13. EXTRACT GENERATED TOKENS
     # ========================================================
 
     generated_tokens = (
@@ -429,7 +417,7 @@ def test_single_sample():
     )
 
     # ========================================================
-    # 15. REMOVE EOS
+    # 14. REMOVE EOS
     # ========================================================
 
     eos_positions = (
@@ -457,7 +445,7 @@ def test_single_sample():
         )
 
     # ========================================================
-    # 16. DECODE
+    # 15. DECODE
     # ========================================================
 
     teacher_output = (
@@ -468,7 +456,7 @@ def test_single_sample():
     )
 
     # ========================================================
-    # 17. PRINT RESULT
+    # 16. PRINT RESULT
     # ========================================================
 
     print()
@@ -505,7 +493,7 @@ def test_single_sample():
     print("=" * 80)
 
     # ========================================================
-    # 18. CLEANUP
+    # 17. CLEANUP
     # ========================================================
 
     del outputs
