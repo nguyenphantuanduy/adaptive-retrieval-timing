@@ -121,18 +121,6 @@ Reason through the question step by step.
 
 Use the provided reasoning instruction to guide the reasoning.
 
-Determine what information is required.
-
-Identify the relevant evidence in the provided documents.
-
-Follow the necessary information dependencies between
-intermediate facts.
-
-For multi-hop questions, clearly connect the intermediate
-answers so that the final answer follows naturally from them.
-
-Write a natural, coherent reasoning process.
-
 At the end, provide the concise final answer using exactly:
 
 <answer>
