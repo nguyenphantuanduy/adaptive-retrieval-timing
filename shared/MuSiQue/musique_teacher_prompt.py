@@ -48,7 +48,6 @@ The final answer should be concise and appear at the end in
 exactly this form:
 
 <answer>
-FINAL_ANSWER
 </answer>
 """.strip()
 
@@ -137,7 +136,6 @@ Write a natural, coherent reasoning process.
 At the end, provide the concise final answer using exactly:
 
 <answer>
-FINAL_ANSWER
 </answer>
 """.strip()
 
