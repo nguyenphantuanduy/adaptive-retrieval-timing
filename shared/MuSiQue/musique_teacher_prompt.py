@@ -93,7 +93,7 @@ The final answer should be concise and appear at the end in
 exactly this form:
 
 <answer>
-<short answer>
+short answer
 </answer>
 
 
@@ -162,7 +162,9 @@ Write a natural, coherent reasoning process.
 
 At the end, provide the concise final answer using exactly:
 
-Answer: <short answer>
+<answer>
+short answer
+</answer>
 """.strip()
 
     return prompt
