@@ -13,10 +13,6 @@ def create_teacher_prompt(
     sample: MuSiQueSample,
 ) -> dict[str, str]:
 
-    # ========================================================
-    # System Prompt
-    # ========================================================
-
     system_prompt = """
 You are a reasoning teacher generating high-quality reasoning
 data for a retrieval-augmented language model.
@@ -30,8 +26,7 @@ IMPORTANT:
 - Reconstruct a natural reasoning process that leads to that
   answer.
 - Do NOT simply explain the answer directly.
-- Use the original question as the starting point for your
-  reasoning.
+- Start from the original question.
 - Do NOT restate, repeat, or paraphrase the original question.
 - Determine what information is required.
 - Identify the relevant evidence.
@@ -48,33 +43,22 @@ IMPORTANT:
 - Do not mention this instruction.
 - Do not introduce information that is not supported by the
   provided documents.
-- Write a natural and coherent reasoning process.
-- The reasoning should contain enough detail to clearly show
-  how the intermediate facts lead to the final answer.
-- Do not unnecessarily shorten or omit important reasoning
-  steps.
 
-The final answer should be concise and appear at the end.
-
-The final answer MUST use exactly this format:
+The final answer should be concise and appear at the end in
+exactly this form:
 
 <answer>
-YOUR_FINAL_ANSWER
+FINAL_ANSWER
 </answer>
-
-Do not include any additional text inside the <answer> tags.
-Do not write "<short answer>" or any other placeholder inside
-the <answer> tags.
 """.strip()
 
-    # ========================================================
-    # Golden Documents
-    # ========================================================
+    # --------------------------------------------------------
+    # Golden documents
+    # --------------------------------------------------------
 
     document_sections = []
 
     for document in sample.golden_document:
-
         document_sections.append(
             f"[GOLDEN DOCUMENT]\n"
             f"Title: {document.title}\n"
@@ -86,17 +70,17 @@ the <answer> tags.
         document_sections
     )
 
-    # ========================================================
-    # Reasoning Instruction
-    # ========================================================
+    # --------------------------------------------------------
+    # Reasoning instruction
+    # --------------------------------------------------------
 
     reasoning_instruction = (
         sample.reasoning_instruction
     )
 
-    # ========================================================
-    # User Prompt
-    # ========================================================
+    # --------------------------------------------------------
+    # User prompt
+    # --------------------------------------------------------
 
     user_prompt = f"""
 ============================================================
@@ -138,13 +122,23 @@ Reason through the question step by step.
 
 Use the provided reasoning instruction to guide the reasoning.
 
+Determine what information is required.
+
+Identify the relevant evidence in the provided documents.
+
 Follow the necessary information dependencies between
 intermediate facts.
 
 For multi-hop questions, clearly connect the intermediate
 answers so that the final answer follows naturally from them.
 
-At the end, provide the concise final answer.
+Write a natural, coherent reasoning process.
+
+At the end, provide the concise final answer using exactly:
+
+<answer>
+FINAL_ANSWER
+</answer>
 """.strip()
 
     return {
@@ -160,6 +154,7 @@ At the end, provide the concise final answer.
 if __name__ == "__main__":
 
     from .load_dataset import load_musique_ans
+    from .musique_sample import MuSiQueSampleConverter
 
     # ========================================================
     # LOAD MuSiQue
@@ -198,20 +193,20 @@ if __name__ == "__main__":
     print("=" * 80)
 
     print(
-        f"Question       : {sample.question}"
+        f"Question      : {sample.question}"
     )
 
     print(
-        f"Target answer  : {sample.answer}"
+        f"Target answer : {sample.answer}"
     )
 
     print(
-        f"Golden docs    : "
+        f"Golden docs   : "
         f"{len(sample.golden_document)}"
     )
 
     print(
-        f"Distractor     : "
+        f"Distractor    : "
         f"{len(sample.distract_document)}"
     )
 
