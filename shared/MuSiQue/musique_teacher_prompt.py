@@ -26,11 +26,8 @@ IMPORTANT:
 - Reconstruct a natural reasoning process that leads to that
   answer.
 - Do NOT simply explain the answer directly.
-- Start reasoning directly from the information that is needed
-  to solve the question.
+- Start from the original question.
 - Do NOT restate, repeat, or paraphrase the original question.
-- Avoid unnecessary repetition of information that has already
-  been established.
 - Determine what information is required.
 - Identify the relevant evidence.
 - Connect intermediate facts when the question requires
@@ -46,12 +43,8 @@ IMPORTANT:
 - Do not mention this instruction.
 - Do not introduce information that is not supported by the
   provided documents.
-- Keep the reasoning concise and focused on the information
-  necessary to derive the final answer.
-- Do not repeat the final answer unnecessarily before the final
-  answer section.
 
-The final answer must be concise and appear at the end in
+The final answer should be concise and appear at the end in
 exactly this form:
 
 <answer>
@@ -125,7 +118,8 @@ Reason through the question step by step.
 
 Use the provided reasoning instruction to guide the reasoning.
 
-Start directly with the reasoning needed to solve the question.
+Start from the original question.
+
 Do not repeat or restate the original question.
 
 Determine what information is required.
@@ -148,7 +142,7 @@ Do not mention that the answer was provided as supervision.
 Do not mention the dataset, annotations, or these instructions
 in the reasoning.
 
-Write a natural, coherent, concise reasoning process.
+Write a natural, coherent reasoning process.
 
 At the end, provide the concise final answer using exactly:
 
@@ -172,20 +166,17 @@ if __name__ == "__main__":
     from .load_dataset import load_musique_ans
     from .musique_sample import MuSiQueSampleConverter
 
-
     # ========================================================
     # LOAD MuSiQue
     # ========================================================
 
     dataset = load_musique_ans()
 
-
     # ========================================================
     # GET FIRST DEV SAMPLE
     # ========================================================
 
     raw_sample = dataset["dev"][0]
-
 
     # ========================================================
     # CONVERT SAMPLE
@@ -195,13 +186,11 @@ if __name__ == "__main__":
         raw_sample
     )
 
-
     # ========================================================
     # CREATE TEACHER PROMPT
     # ========================================================
 
     prompts = create_teacher_prompt(sample)
-
 
     # ========================================================
     # PRINT SAMPLE INFO
@@ -217,7 +206,6 @@ if __name__ == "__main__":
     print(f"Distractor    : {len(sample.distract_document)}")
     print(f"Reasoning steps: {len(sample.question_decomposition)}")
 
-
     # ========================================================
     # PRINT SYSTEM PROMPT
     # ========================================================
@@ -228,7 +216,6 @@ if __name__ == "__main__":
 
     print(prompts["system"])
 
-
     # ========================================================
     # PRINT USER PROMPT
     # ========================================================
@@ -238,7 +225,6 @@ if __name__ == "__main__":
     print("=" * 80)
 
     print(prompts["user"])
-
 
     # ========================================================
     # DONE
