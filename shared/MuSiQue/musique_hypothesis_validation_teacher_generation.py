@@ -180,7 +180,7 @@ def load_teacher_model():
     )
 
     print(
-        f"  Device map: auto"
+        "  Device map: auto"
     )
 
     print(
@@ -388,15 +388,13 @@ def prepare_teacher_generation_samples(
     # 7. VALIDATE
     # ========================================================
 
-    total_selected = sum(
-        len(
-            selected_samples_by_hop[hop]
-        )
-        for hop in (2, 3, 4)
-    )
-
     assert (
-        total_selected
+        sum(
+            len(
+                selected_samples_by_hop[hop]
+            )
+            for hop in (2, 3, 4)
+        )
         == num_samples
     )
 
@@ -527,6 +525,15 @@ def generate_teacher_outputs(
                     )
                 )
 
+                # ------------------------------------------------
+                # create_teacher_prompt() now returns:
+                #
+                # {
+                #     "system": ...,
+                #     "user": ...
+                # }
+                # ------------------------------------------------
+
                 teacher_prompt = (
                     create_teacher_prompt(
                         sample=sample
@@ -541,16 +548,28 @@ def generate_teacher_outputs(
             # APPLY CHAT TEMPLATE
             # =================================================
 
-            messages_batch = [
-                [
+            messages_batch = []
+
+            for teacher_prompt in teacher_prompts:
+
+                messages = [
+                    {
+                        "role": "system",
+                        "content": teacher_prompt[
+                            "system"
+                        ],
+                    },
                     {
                         "role": "user",
-                        "content": teacher_prompt,
-                    }
+                        "content": teacher_prompt[
+                            "user"
+                        ],
+                    },
                 ]
-                for teacher_prompt
-                in teacher_prompts
-            ]
+
+                messages_batch.append(
+                    messages
+                )
 
             texts = [
                 tokenizer.apply_chat_template(
@@ -559,8 +578,7 @@ def generate_teacher_outputs(
                     add_generation_prompt=True,
                     enable_thinking=False,
                 )
-                for messages
-                in messages_batch
+                for messages in messages_batch
             ]
 
             # =================================================
@@ -738,13 +756,16 @@ def generate_teacher_outputs(
                 f"{batch_generation_time:.2f}s"
             )
 
-            # -------------------------------------------------
-            # Free batch tensors
-            # -------------------------------------------------
+            # =================================================
+            # FREE BATCH TENSORS
+            # =================================================
 
             del outputs
             del inputs
             del generated_tokens_batch
+            del texts
+            del messages_batch
+            del teacher_prompts
 
             gc.collect()
 
@@ -884,7 +905,7 @@ def run_teacher_generation(
     model,
     tokenizer,
     num_samples: int = TEACHER_GENERATION_SAMPLES,
-    batch_size_by_hop = BATCH_SIZE_BY_HOP,
+    batch_size_by_hop=BATCH_SIZE_BY_HOP,
     max_new_tokens: int = MAX_NEW_TOKENS,
     temperature: float = TEMPERATURE,
     top_p: float = TOP_P,
