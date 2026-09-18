@@ -13,6 +13,10 @@ def create_teacher_prompt(
     sample: MuSiQueSample,
 ) -> dict[str, str]:
 
+    # ========================================================
+    # System Prompt
+    # ========================================================
+
     system_prompt = """
 You are a reasoning teacher generating high-quality reasoning
 data for a retrieval-augmented language model.
@@ -26,7 +30,8 @@ IMPORTANT:
 - Reconstruct a natural reasoning process that leads to that
   answer.
 - Do NOT simply explain the answer directly.
-- Start from the original question.
+- Use the original question as the starting point for your
+  reasoning.
 - Do NOT restate, repeat, or paraphrase the original question.
 - Determine what information is required.
 - Identify the relevant evidence.
@@ -43,22 +48,33 @@ IMPORTANT:
 - Do not mention this instruction.
 - Do not introduce information that is not supported by the
   provided documents.
+- Write a natural and coherent reasoning process.
+- The reasoning should contain enough detail to clearly show
+  how the intermediate facts lead to the final answer.
+- Do not unnecessarily shorten or omit important reasoning
+  steps.
 
-The final answer should be concise and appear at the end in
-exactly this form:
+The final answer should be concise and appear at the end.
+
+The final answer MUST use exactly this format:
 
 <answer>
-<short answer>
+YOUR_FINAL_ANSWER
 </answer>
+
+Do not include any additional text inside the <answer> tags.
+Do not write "<short answer>" or any other placeholder inside
+the <answer> tags.
 """.strip()
 
-    # --------------------------------------------------------
-    # Golden documents
-    # --------------------------------------------------------
+    # ========================================================
+    # Golden Documents
+    # ========================================================
 
     document_sections = []
 
     for document in sample.golden_document:
+
         document_sections.append(
             f"[GOLDEN DOCUMENT]\n"
             f"Title: {document.title}\n"
@@ -66,17 +82,21 @@ exactly this form:
             f"[END DOCUMENT]"
         )
 
-    documents_text = "\n\n".join(document_sections)
+    documents_text = "\n\n".join(
+        document_sections
+    )
 
-    # --------------------------------------------------------
-    # Reasoning instruction
-    # --------------------------------------------------------
+    # ========================================================
+    # Reasoning Instruction
+    # ========================================================
 
-    reasoning_instruction = sample.reasoning_instruction
+    reasoning_instruction = (
+        sample.reasoning_instruction
+    )
 
-    # --------------------------------------------------------
-    # User prompt
-    # --------------------------------------------------------
+    # ========================================================
+    # User Prompt
+    # ========================================================
 
     user_prompt = f"""
 ============================================================
@@ -118,37 +138,13 @@ Reason through the question step by step.
 
 Use the provided reasoning instruction to guide the reasoning.
 
-Start from the original question.
-
-Do not repeat or restate the original question.
-
-Determine what information is required.
-
-Identify the relevant evidence in the provided documents.
-
 Follow the necessary information dependencies between
 intermediate facts.
 
 For multi-hop questions, clearly connect the intermediate
 answers so that the final answer follows naturally from them.
 
-When referring to evidence, identify the source using its exact
-document Title.
-
-Do not refer to documents using positional names such as
-"Document 1" or "Document 2".
-
-Do not mention that the answer was provided as supervision.
-Do not mention the dataset, annotations, or these instructions
-in the reasoning.
-
-Write a natural, coherent reasoning process.
-
-At the end, provide the concise final answer using exactly:
-
-<answer>
-<short answer>
-</answer>
+At the end, provide the concise final answer.
 """.strip()
 
     return {
@@ -164,7 +160,6 @@ At the end, provide the concise final answer using exactly:
 if __name__ == "__main__":
 
     from .load_dataset import load_musique_ans
-    from .musique_sample import MuSiQueSampleConverter
 
     # ========================================================
     # LOAD MuSiQue
@@ -190,7 +185,9 @@ if __name__ == "__main__":
     # CREATE TEACHER PROMPT
     # ========================================================
 
-    prompts = create_teacher_prompt(sample)
+    prompts = create_teacher_prompt(
+        sample
+    )
 
     # ========================================================
     # PRINT SAMPLE INFO
@@ -200,11 +197,28 @@ if __name__ == "__main__":
     print("SAMPLE")
     print("=" * 80)
 
-    print(f"Question      : {sample.question}")
-    print(f"Target answer : {sample.answer}")
-    print(f"Golden docs   : {len(sample.golden_document)}")
-    print(f"Distractor    : {len(sample.distract_document)}")
-    print(f"Reasoning steps: {len(sample.question_decomposition)}")
+    print(
+        f"Question       : {sample.question}"
+    )
+
+    print(
+        f"Target answer  : {sample.answer}"
+    )
+
+    print(
+        f"Golden docs    : "
+        f"{len(sample.golden_document)}"
+    )
+
+    print(
+        f"Distractor     : "
+        f"{len(sample.distract_document)}"
+    )
+
+    print(
+        f"Reasoning steps: "
+        f"{len(sample.question_decomposition)}"
+    )
 
     # ========================================================
     # PRINT SYSTEM PROMPT
@@ -214,7 +228,9 @@ if __name__ == "__main__":
     print("SYSTEM PROMPT")
     print("=" * 80)
 
-    print(prompts["system"])
+    print(
+        prompts["system"]
+    )
 
     # ========================================================
     # PRINT USER PROMPT
@@ -224,7 +240,9 @@ if __name__ == "__main__":
     print("USER PROMPT")
     print("=" * 80)
 
-    print(prompts["user"])
+    print(
+        prompts["user"]
+    )
 
     # ========================================================
     # DONE
