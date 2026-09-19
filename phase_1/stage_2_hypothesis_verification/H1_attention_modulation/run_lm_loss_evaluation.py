@@ -1040,7 +1040,7 @@ if __name__ == "__main__":
     )
 
     MODEL_NAME = (
-        "Qwen/Qwen3-4B"
+        "Qwen/Qwen2.5-3B-Instruct"
     )
 
     HF_REPO = (
