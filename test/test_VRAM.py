@@ -15,11 +15,11 @@ from shared.MuSiQue.load_hypothesis_validation import (
     load_teacher_generated_hypothesis_validation,
 )
 
-from .build_lm_loss_samples import (
+from ..phase_1.stage_2_hypothesis_verification.H1_attention_modulation.build_lm_loss_samples import (
     create_lm_loss_samples,
 )
 
-from .model_input import (
+from ..phase_1.stage_2_hypothesis_verification.H1_attention_modulation.model_input import (
     create_model_input_for_lm_loss,
 )
 

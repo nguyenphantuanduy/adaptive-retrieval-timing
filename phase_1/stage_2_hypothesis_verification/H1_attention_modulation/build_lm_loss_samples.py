@@ -318,7 +318,7 @@ def create_lm_loss_samples(
 
 
 # ============================================================
-# TEST
+# TEST — CREATE LM LOSS SAMPLES
 # ============================================================
 
 def test_create_lm_loss_samples():
@@ -408,6 +408,10 @@ def test_create_lm_loss_samples():
             assert (
                 len(lm_sample.documents)
                 == MAX_DOCS
+            ), (
+                f"{hop} {ratio}: "
+                f"expected {MAX_DOCS} documents, "
+                f"got {len(lm_sample.documents)}"
             )
 
             # ------------------------------------------------
@@ -459,17 +463,27 @@ def test_create_lm_loss_samples():
             )
 
             # ------------------------------------------------
-            # Check question / answer.
+            # Check question.
             # ------------------------------------------------
 
             assert (
                 lm_sample.question
                 == sample["question"]
+            ), (
+                f"{hop} {ratio}: "
+                "question was changed"
             )
+
+            # ------------------------------------------------
+            # Check teacher-generated answer.
+            # ------------------------------------------------
 
             assert (
                 lm_sample.answer
-                == sample["answer"]
+                == sample["teacher_generation_output"]
+            ), (
+                f"{hop} {ratio}: "
+                "teacher-generated answer was changed"
             )
 
             print(
@@ -515,8 +529,9 @@ def test_create_lm_loss_samples():
 
     print()
     print("=" * 80)
-    print("✓ ALL HOP TESTS PASSED")
+    print("✓ CREATE LM LOSS SAMPLES PASSED")
     print("=" * 80)
+
 
 # ============================================================
 # TEST — ZERO-RETRIEVAL INPUT CONSISTENCY
@@ -540,7 +555,6 @@ def test_zero_retrieval_input_consistency():
     print("TEST — ZERO-RETRIEVAL INPUT CONSISTENCY")
     print("=" * 80)
 
-
     # ========================================================
     # 1. LOAD DATASET
     # ========================================================
@@ -551,7 +565,6 @@ def test_zero_retrieval_input_consistency():
 
     sample = datasets["2-hop"][0]
 
-
     # ========================================================
     # 2. CREATE LM-LOSS SAMPLES
     # ========================================================
@@ -560,15 +573,13 @@ def test_zero_retrieval_input_consistency():
         sample
     )
 
-
     # ========================================================
     # 3. LOAD TOKENIZER
     # ========================================================
 
     tokenizer = AutoTokenizer.from_pretrained(
-        "Qwen/Qwen3-4B"
+        "Qwen/Qwen2.5-3B-Instruct"
     )
-
 
     # ========================================================
     # 4. CREATE MODEL INPUTS
@@ -585,9 +596,8 @@ def test_zero_retrieval_input_consistency():
             )
         )
 
-
     # ========================================================
-    # 5. GET FIRST SAMPLE OF EACH RATIO
+    # 5. PRINT INPUT SHAPES
     # ========================================================
 
     print()
@@ -600,19 +610,8 @@ def test_zero_retrieval_input_consistency():
             f"{model_inputs[ratio]['input_ids'].shape}"
         )
 
-
     # ========================================================
-    # 6. EXTRACT ZERO-RETRIEVAL SAMPLE
-    # ========================================================
-    #
-    # The first sample corresponds to:
-    #
-    #     retrieval_decision = 0 / 32
-    #
-    # We only compare tokens where:
-    #
-    #     document_attention_mask == 0
-    #
+    # 6. EXTRACT ZERO-RETRIEVAL INPUT
     # ========================================================
 
     zero_retrieval_inputs = {}
@@ -676,7 +675,6 @@ def test_zero_retrieval_input_consistency():
             f"{non_document_input_ids.shape[0]}"
         )
 
-
     # ========================================================
     # 7. COMPARE AGAINST FIRST RATIO
     # ========================================================
@@ -691,7 +689,6 @@ def test_zero_retrieval_input_consistency():
         ]
     )
 
-
     print()
     print("-" * 80)
     print(
@@ -699,7 +696,6 @@ def test_zero_retrieval_input_consistency():
         f"{reference_ratio}"
     )
     print("-" * 80)
-
 
     # ========================================================
     # 8. COMPARE
@@ -718,33 +714,24 @@ def test_zero_retrieval_input_consistency():
         )
 
         # ----------------------------------------------------
-        # Same number of non-document tokens
+        # Same number of non-document tokens.
         # ----------------------------------------------------
 
-        if (
+        assert (
             input_ids.shape
-            != reference.shape
-        ):
+            == reference.shape
+        ), (
+            f"{ratio}: different non-document input shape.\n"
+            f"Reference: {reference.shape}\n"
+            f"Current:   {input_ids.shape}"
+        )
 
-            print(
-                "  ✗ DIFFERENT SHAPE"
-            )
-
-            print(
-                f"    Reference: "
-                f"{reference.shape}"
-            )
-
-            print(
-                f"    Current  : "
-                f"{input_ids.shape}"
-            )
-
-            continue
-
+        print(
+            "  ✓ Same shape"
+        )
 
         # ----------------------------------------------------
-        # Compare token IDs
+        # Compare token IDs.
         # ----------------------------------------------------
 
         identical = torch.equal(
@@ -752,33 +739,15 @@ def test_zero_retrieval_input_consistency():
             input_ids,
         )
 
+        assert identical, (
+            f"{ratio}: zero-retrieval input differs "
+            f"from reference ratio "
+            f"{reference_ratio}"
+        )
 
-        if identical:
-
-            print(
-                "  ✓ IDENTICAL"
-            )
-
-        else:
-
-            differences = (
-                reference
-                != input_ids
-            )
-
-            num_different = (
-                differences.sum().item()
-            )
-
-            print(
-                "  ✗ DIFFERENT"
-            )
-
-            print(
-                f"    Different tokens: "
-                f"{num_different}"
-            )
-
+        print(
+            "  ✓ IDENTICAL"
+        )
 
     # ========================================================
     # 9. FINAL
@@ -786,8 +755,9 @@ def test_zero_retrieval_input_consistency():
 
     print()
     print("=" * 80)
-    print("TEST COMPLETE")
+    print("✓ ZERO-RETRIEVAL INPUT CONSISTENCY PASSED")
     print("=" * 80)
+
 
 # ============================================================
 # MAIN
@@ -795,5 +765,16 @@ def test_zero_retrieval_input_consistency():
 
 if __name__ == "__main__":
 
-    # test_create_lm_loss_samples()
+    print()
+    print("=" * 80)
+    print("BUILD LM LOSS SAMPLES — TEST SUITE")
+    print("=" * 80)
+
+    test_create_lm_loss_samples()
+
     test_zero_retrieval_input_consistency()
+
+    print()
+    print("=" * 80)
+    print("✓ ALL TESTS PASSED")
+    print("=" * 80)

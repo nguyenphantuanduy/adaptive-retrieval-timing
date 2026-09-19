@@ -1,9 +1,10 @@
+
 # ============================================================
 # TEST TEACHER GENERATED HUGGING FACE DATASET
 #
 # Check:
 #   1. teacher_generation_output exists
-#   2. Teacher output contains final "Answer:"
+#   2. Teacher output contains final "<answer>...</answer>"
 #   3. Extracted final answer matches ground-truth answer
 #
 # Dataset:
@@ -88,11 +89,13 @@ def extract_final_answer(
 
     Expected format:
 
-        Answer: something
+        <answer>
+        something
+        </answer>
 
     The function searches for the LAST occurrence of
-    "Answer:" because the teacher may theoretically mention
-    "Answer:" earlier in its reasoning.
+    "<answer>...</answer>" because the teacher may theoretically
+    mention the answer format earlier in its reasoning.
     """
 
     if teacher_output is None:
@@ -106,12 +109,12 @@ def extract_final_answer(
         return None
 
     # --------------------------------------------------------
-    # Find all occurrences of "Answer:"
+    # Find all occurrences of <answer>...</answer>
     # --------------------------------------------------------
 
     matches = list(
         re.finditer(
-            r"(?im)^\s*Answer\s*:\s*(.+?)\s*$",
+            r"(?is)<answer>\s*(.*?)\s*</answer>",
             teacher_output,
         )
     )
@@ -120,7 +123,7 @@ def extract_final_answer(
         return None
 
     # --------------------------------------------------------
-    # Use the LAST Answer: occurrence
+    # Use the LAST <answer>...</answer> occurrence
     # --------------------------------------------------------
 
     answer = matches[-1].group(1).strip()
@@ -184,7 +187,7 @@ def check_sample(
         }
 
     # --------------------------------------------------------
-    # Extract final Answer:
+    # Extract final <answer>...</answer>
     # --------------------------------------------------------
 
     predicted_answer = (
@@ -396,7 +399,7 @@ def check_hop_dataset(
     )
 
     print(
-        f"Missing final Answer       : "
+        f"Missing final <answer>     : "
         f"{missing_final_answer_count:,}"
     )
 
@@ -615,6 +618,7 @@ def main():
             DATASET_NAME,
             name=hop,
             split=SPLIT,
+            download_mode="force_redownload",
         )
 
         print()
@@ -700,7 +704,7 @@ def main():
     )
 
     print(
-        f"Missing final Answer        : "
+        f"Missing final <answer>      : "
         f"{total_missing_final_answer:,}"
     )
 
@@ -795,7 +799,7 @@ def main():
         )
 
         print(
-            "✓ Every teacher output has final Answer:"
+            "✓ Every teacher output has final <answer>"
         )
 
         print(
@@ -821,7 +825,7 @@ def main():
             print(
                 f"  - "
                 f"{total_missing_final_answer:,} "
-                f"samples missing final Answer:"
+                f"samples missing final <answer>"
             )
 
         if total_answer_mismatches > 0:
