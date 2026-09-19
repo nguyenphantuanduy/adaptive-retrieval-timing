@@ -31,7 +31,7 @@ DATASET_REPO = "adaptive-retrieval-timing/teacher-generated-hypothesis-validatio
 CONFIG_NAME = "2-hop"
 SPLIT = "validation"
 MAX_DOCUMENTS = 3
-MAX_NEW_TOKENS = 96
+MAX_NEW_TOKENS = 512
 
 
 def get_input_device(model) -> torch.device:
