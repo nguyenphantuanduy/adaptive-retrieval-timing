@@ -500,7 +500,7 @@ def measure_ratio_gradients(
         # We do NOT want to update any model parameter.
         learning_rate=0.0,
 
-        logging_steps=1,
+        logging_strategy="no",
 
         report_to="none",
 
