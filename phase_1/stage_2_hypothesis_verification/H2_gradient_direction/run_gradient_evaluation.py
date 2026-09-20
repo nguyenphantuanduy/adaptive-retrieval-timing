@@ -51,7 +51,6 @@ Important:
 import argparse
 import csv
 import gc
-import time
 from pathlib import Path
 from typing import Any
 
@@ -195,10 +194,6 @@ class GradientCapture:
             int,
             float,
         ] = {}
-
-        self.current_decision_index: (
-            int | None
-        ) = None
 
     def hook(
         self,
@@ -440,10 +435,6 @@ def _install_gradient_hook(
             )
         )
 
-        capture.current_decision_index = (
-            decision_index
-        )
-
         # ----------------------------------------------------
         # Enable gradient on actual Tensor
         # ----------------------------------------------------
@@ -517,7 +508,7 @@ def _build_training_args(
         learning_rate=0.0,
 
         # ----------------------------------------------------
-        # Logging
+        # Disable Trainer logging
         # ----------------------------------------------------
 
         logging_strategy="no",
@@ -555,7 +546,7 @@ def _build_training_args(
         },
 
         # ----------------------------------------------------
-        # Deterministic dataloader behavior where supported
+        # Dataloader
         # ----------------------------------------------------
 
         dataloader_num_workers=0,
@@ -625,14 +616,6 @@ def _run_single_decision(
 
     single_dataset = dataset.select(
         [decision_index]
-    )
-
-    # --------------------------------------------------------
-    # Fresh capture state for this run
-    # --------------------------------------------------------
-
-    capture.current_decision_index = (
-        None
     )
 
     try:
@@ -722,19 +705,6 @@ def _measure_ratio_gradients(
 
     try:
 
-        print()
-        print("=" * 80)
-
-        print(
-            f"RATIO {ratio[0]}:{ratio[1]}"
-        )
-
-        print("=" * 80)
-
-        start_time = (
-            time.perf_counter()
-        )
-
         # ====================================================
         # FIRST ATTEMPT
         # ====================================================
@@ -749,24 +719,12 @@ def _measure_ratio_gradients(
 
         except torch.cuda.OutOfMemoryError:
 
-            print(
-                "    ⚠ Trainer OOM"
-                " → CUDA cleanup"
-                " → retry missing decisions"
-            )
-
             _cleanup_cuda_after_oom()
 
         except RuntimeError as error:
 
             if not _is_cuda_oom(error):
                 raise
-
-            print(
-                "    ⚠ Trainer CUDA OOM"
-                " → CUDA cleanup"
-                " → retry missing decisions"
-            )
 
             _cleanup_cuda_after_oom()
 
@@ -782,32 +740,11 @@ def _measure_ratio_gradients(
             not in capture.gradients
         ]
 
-        if missing_decisions:
-
-            print(
-                f"    Retrying "
-                f"{len(missing_decisions)} "
-                f"missing decisions individually..."
-            )
-
         failed_decisions = []
 
         for decision_index in (
             missing_decisions
         ):
-
-            d_value = (
-                decision_index
-                / NUM_DECISION_LEVELS
-            )
-
-            print(
-                f"      retry "
-                f"d={d_value:.4f} "
-                f"({decision_index:2d}/32)",
-                end=" ",
-                flush=True,
-            )
 
             success = (
                 _run_single_decision(
@@ -818,15 +755,7 @@ def _measure_ratio_gradients(
                 )
             )
 
-            if success:
-
-                print("✓")
-
-            else:
-
-                print(
-                    "OOM → NaN"
-                )
+            if not success:
 
                 failed_decisions.append(
                     decision_index
@@ -861,11 +790,6 @@ def _measure_ratio_gradients(
                 gradient
             )
 
-        elapsed = (
-            time.perf_counter()
-            - start_time
-        )
-
         # ====================================================
         # SANITY CHECK
         # ====================================================
@@ -874,43 +798,6 @@ def _measure_ratio_gradients(
             len(gradients)
             == NUM_DECISIONS
         )
-
-        # ----------------------------------------------------
-        # Print results
-        # ----------------------------------------------------
-
-        for decision_index, gradient in (
-            enumerate(gradients)
-        ):
-
-            d_value = (
-                decision_index
-                / NUM_DECISION_LEVELS
-            )
-
-            print(
-                f"d={d_value:.4f} "
-                f"({decision_index:2d}/32) "
-                f"grad={gradient:+.10e}"
-            )
-
-        print()
-
-        print(
-            f"Ratio time: "
-            f"{elapsed:.3f} seconds"
-        )
-
-        if failed_decisions:
-
-            print(
-                "NaN decisions: "
-                + ", ".join(
-                    str(index)
-                    for index
-                    in failed_decisions
-                )
-            )
 
         return gradients
 
@@ -1136,14 +1023,6 @@ def _evaluate_one_sample(
         lm_loss_samples.items()
     ):
 
-        print()
-        print(
-            f"    {hop} | "
-            f"sample={sample_index} | "
-            f"ratio={ratio[0]}:{ratio[1]}",
-            flush=True,
-        )
-
         # ----------------------------------------------------
         # Same H1 input construction
         # ----------------------------------------------------
@@ -1310,20 +1189,11 @@ def run_gradient_evaluation(
     # DEVICE
     # ========================================================
 
-    device = next(
-        model.parameters()
-    ).device
-
     model.eval()
 
     # ========================================================
     # LOAD DATASET
     # ========================================================
-
-    print(
-        "Loading MuSiQue validation dataset...",
-        flush=True,
-    )
 
     all_datasets = (
         load_teacher_generated_hypothesis_validation()
@@ -1361,11 +1231,6 @@ def run_gradient_evaluation(
     # ========================================================
     # GLOBAL RATIO SCHEMA
     # ========================================================
-
-    print(
-        "Building global CSV schema...",
-        flush=True,
-    )
 
     all_ratios = (
         _build_global_schema(
@@ -1453,7 +1318,7 @@ def run_gradient_evaluation(
             ]
 
             # ------------------------------------------------
-            # Progress
+            # Minimal progress log
             # ------------------------------------------------
 
             print(
@@ -1465,10 +1330,6 @@ def run_gradient_evaluation(
                 f"{len(samples):,} | "
                 f"id={sample_id}",
                 flush=True,
-            )
-
-            sample_start = (
-                time.perf_counter()
             )
 
             # ------------------------------------------------
@@ -1492,14 +1353,12 @@ def run_gradient_evaluation(
 
             processed_samples += 1
 
-            sample_elapsed = (
-                time.perf_counter()
-                - sample_start
-            )
+            # ------------------------------------------------
+            # Sample complete
+            # ------------------------------------------------
 
             print(
-                f"    ✓ complete | "
-                f"{sample_elapsed:.3f}s",
+                f"    ✓ complete",
                 flush=True,
             )
 
@@ -1516,13 +1375,6 @@ def run_gradient_evaluation(
                     output_path=output_path,
                     fieldnames=fieldnames,
                     rows=rows_buffer,
-                )
-
-                print(
-                    f"    💾 checkpoint | "
-                    f"{processed_samples:,}/"
-                    f"{total_samples:,}",
-                    flush=True,
                 )
 
                 rows_buffer.clear()
@@ -1546,8 +1398,7 @@ def run_gradient_evaluation(
         # ====================================================
 
         print(
-            f"✓ {hop} complete | "
-            f"{len(samples):,} samples",
+            f"✓ {hop} complete",
             flush=True,
         )
 
@@ -1555,23 +1406,12 @@ def run_gradient_evaluation(
     # FINAL
     # ========================================================
 
-    print()
     print(
         f"✓ gradient evaluation complete | "
         f"{processed_samples:,}/"
         f"{total_samples:,} samples",
         flush=True,
     )
-
-    for hop, output_path in (
-        output_paths.items()
-    ):
-
-        print(
-            f"  {hop:<8} → "
-            f"{output_path}",
-            flush=True,
-        )
 
     return output_paths
 
@@ -1623,11 +1463,6 @@ if __name__ == "__main__":
     # TOKENIZER
     # ========================================================
 
-    print(
-        "Loading tokenizer...",
-        flush=True,
-    )
-
     tokenizer = (
         AutoTokenizer.from_pretrained(
             MODEL_NAME,
@@ -1637,11 +1472,6 @@ if __name__ == "__main__":
     # ========================================================
     # MODEL
     # ========================================================
-
-    print(
-        "Loading ART model...",
-        flush=True,
-    )
 
     model = (
         AutoModelForCausalLM.from_pretrained(
@@ -1670,11 +1500,6 @@ if __name__ == "__main__":
 
     model.eval()
 
-    print(
-        "Model loaded and frozen.",
-        flush=True,
-    )
-
     # ========================================================
     # RUN
     # ========================================================
@@ -1692,14 +1517,4 @@ if __name__ == "__main__":
     # FINAL OUTPUT
     # ========================================================
 
-    print()
-
-    for hop, output_path in (
-        results.items()
-    ):
-
-        print(
-            f"{hop:<8} → "
-            f"{output_path}",
-            flush=True,
-        )
+    print("Done.", flush=True)
