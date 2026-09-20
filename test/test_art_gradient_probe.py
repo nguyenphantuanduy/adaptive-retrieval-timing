@@ -15,24 +15,21 @@ For ONE MuSiQue validation sample:
       ↓
     create ONE HF Dataset with 33 samples
       ↓
-    sample 0 → d=0/32
-    sample 1 → d=1/32
-    ...
-    sample 32 → d=32/32
-      ↓
-    one HF Trainer.train()
+    HF Trainer.train()
       ↓
     batch_size=1
       ↓
     capture ∂L/∂d with Tensor.register_hook()
       ↓
-    print gradient + timing
+    map each gradient to its ACTUAL decision value d
+      ↓
+    print gradients in ordered d = 0/32 ... 32/32
 
 Important:
 - d is an ordinary Tensor, NOT nn.Parameter.
 - d is taken directly from the HF Dataset batch.
 - d.requires_grad_(True) is enabled inside forward().
-- Hook is registered on the actual Tensor used by ART forward().
+- Hook is registered on the exact Tensor used by ART forward().
 - The actual ART model is used directly.
 - No GradientProbeModel wrapper.
 - No custom Trainer.
@@ -41,6 +38,8 @@ Important:
 - ART model parameters are frozen.
 - learning_rate = 0.
 - Trainer uses gradient checkpointing.
+- Gradient results are indexed by the ACTUAL d value,
+  not by Trainer iteration order.
 """
 
 import argparse
@@ -76,6 +75,7 @@ from phase_1.stage_2_hypothesis_verification.H1_attention_modulation.model_input
 # ============================================================
 
 NUM_DECISION_LEVELS = 32
+NUM_DECISIONS = NUM_DECISION_LEVELS + 1
 
 MODEL_NAME = "Qwen/Qwen2.5-3B-Instruct"
 
@@ -115,13 +115,111 @@ class GradientCapture:
 
     def __init__(self):
 
-        self.gradients = []
+        # IMPORTANT:
+        # Store gradient by ACTUAL decision index.
+        #
+        # Example:
+        #   gradients[0]  = gradient for d=0/32
+        #   gradients[1]  = gradient for d=1/32
+        #   ...
+        #   gradients[32] = gradient for d=32/32
+        #
+        # This makes the result independent of
+        # Trainer's sampling order.
 
-    def hook(self, grad):
+        self.gradients: dict[int, torch.Tensor] = {}
 
-        self.gradients.append(
-            grad.detach().clone()
+    def hook(
+        self,
+        decision_index: int,
+        grad: torch.Tensor,
+    ) -> None:
+
+        # Each Trainer batch has batch_size=1,
+        # therefore grad should contain exactly one d.
+
+        gradient_value = (
+            grad.detach()
+            .clone()
+            .float()
+            .mean()
+            .item()
         )
+
+        self.gradients[decision_index] = gradient_value
+
+
+# ============================================================
+# GET DECISION INDEX FROM ACTUAL d
+# ============================================================
+
+def get_decision_index(
+    d: torch.Tensor,
+) -> int:
+    """
+    Convert the ACTUAL retrieval_decision Tensor
+    received by model.forward() into its decision index.
+
+    Expected:
+
+        d = 0.0       -> 0
+        d = 1/32      -> 1
+        ...
+        d = 1.0       -> 32
+
+    No new d value is created.
+    This only reads the actual Tensor value.
+    """
+
+    assert torch.is_tensor(d)
+
+    # batch_size = 1
+    assert d.numel() == 1, (
+        "Expected exactly one decision value "
+        f"because batch_size=1, got shape={tuple(d.shape)}"
+    )
+
+    decision_score = (
+        d.detach()
+        .float()
+        .reshape(-1)[0]
+        .item()
+    )
+
+    decision_index = int(
+        round(
+            decision_score *
+            NUM_DECISION_LEVELS
+        )
+    )
+
+    # --------------------------------------------------------
+    # Validate that d really corresponds to one of:
+    #
+    # 0/32, 1/32, ..., 32/32
+    # --------------------------------------------------------
+
+    expected_score = (
+        decision_index /
+        NUM_DECISION_LEVELS
+    )
+
+    assert (
+        abs(
+            decision_score -
+            expected_score
+        )
+        < 1e-6
+    ), (
+        "Unexpected retrieval_decision value: "
+        f"d={decision_score}"
+    )
+
+    assert (
+        0 <= decision_index <= NUM_DECISION_LEVELS
+    )
+
+    return decision_index
 
 
 # ============================================================
@@ -157,13 +255,6 @@ def build_dataset(
 
         labels:
             (33, seq_len)
-
-    Therefore:
-
-        Dataset[0]  -> d = 0/32
-        Dataset[1]  -> d = 1/32
-        ...
-        Dataset[32] -> d = 32/32
     """
 
     num_samples = (
@@ -172,7 +263,7 @@ def build_dataset(
 
     assert (
         num_samples ==
-        NUM_DECISION_LEVELS + 1
+        NUM_DECISIONS
     )
 
     # --------------------------------------------------------
@@ -216,7 +307,7 @@ def build_dataset(
     # Sanity checks
     # --------------------------------------------------------
 
-    assert len(dataset) == 33
+    assert len(dataset) == NUM_DECISIONS
 
     assert (
         dataset[0]["retrieval_decision"]
@@ -225,7 +316,9 @@ def build_dataset(
 
     assert (
         abs(
-            dataset[32]["retrieval_decision"]
+            dataset[NUM_DECISIONS - 1][
+                "retrieval_decision"
+            ]
             - 1.0
         )
         < 1e-7
@@ -240,7 +333,7 @@ def build_dataset(
         "Decision range: "
         f"{dataset[0]['retrieval_decision']:.6f}"
         " → "
-        f"{dataset[32]['retrieval_decision']:.6f}"
+        f"{dataset[NUM_DECISIONS - 1]['retrieval_decision']:.6f}"
     )
 
     return dataset
@@ -260,6 +353,9 @@ def install_gradient_hook(
 
         requires_grad_(True)
         register_hook(...)
+
+    The actual d value is read and used to identify
+    which decision the captured gradient belongs to.
 
     No replacement d value is created.
 
@@ -284,6 +380,21 @@ def install_gradient_hook(
         assert torch.is_tensor(d)
 
         # ----------------------------------------------------
+        # Identify this batch by its ACTUAL d value.
+        #
+        # This is the important fix.
+        #
+        # We do NOT assume:
+        #
+        #   first Trainer step  -> d=0
+        #   second Trainer step -> d=1/32
+        #
+        # Instead we read d itself.
+        # ----------------------------------------------------
+
+        decision_index = get_decision_index(d)
+
+        # ----------------------------------------------------
         # Make the actual batch Tensor differentiable.
         #
         # No clone()
@@ -298,7 +409,9 @@ def install_gradient_hook(
         # ----------------------------------------------------
 
         d.register_hook(
-            capture.hook
+            lambda grad,
+            idx=decision_index:
+                capture.hook(idx, grad)
         )
 
         # ----------------------------------------------------
@@ -332,7 +445,7 @@ def measure_ratio_gradients(
 
     assert (
         num_decisions ==
-        NUM_DECISION_LEVELS + 1
+        NUM_DECISIONS
     )
 
     print()
@@ -382,7 +495,7 @@ def measure_ratio_gradients(
 
         # Dataset contains exactly 33 samples.
         # Therefore exactly 33 steps.
-        max_steps=33,
+        max_steps=NUM_DECISIONS,
 
         # We do NOT want to update any model parameter.
         learning_rate=0.0,
@@ -429,6 +542,12 @@ def measure_ratio_gradients(
         # 33 samples
         # batch_size=1
         # => 33 forward/backward steps
+        #
+        # Trainer may process the dataset in an order that
+        # is not guaranteed to match dataset index order.
+        #
+        # That is OK because GradientCapture stores each
+        # gradient using the ACTUAL decision index.
         # ----------------------------------------------------
 
         trainer.train()
@@ -438,41 +557,48 @@ def measure_ratio_gradients(
         )
 
         # ----------------------------------------------------
-        # Verify exactly 33 gradients
+        # Verify exactly 33 UNIQUE gradients.
         # ----------------------------------------------------
 
-        if len(capture.gradients) != 33:
+        if len(capture.gradients) != NUM_DECISIONS:
+
+            missing = [
+                i
+                for i in range(NUM_DECISIONS)
+                if i not in capture.gradients
+            ]
 
             raise RuntimeError(
-                "Expected 33 captured gradients, "
-                f"got {len(capture.gradients)}."
+                "Expected 33 unique captured gradients, "
+                f"got {len(capture.gradients)}. "
+                f"Missing decisions: {missing}"
             )
 
         # ----------------------------------------------------
-        # Extract one scalar gradient per decision.
+        # Extract gradients in CORRECT decision order.
         #
-        # Each captured gradient corresponds to:
+        # IMPORTANT:
         #
-        #   d = 0/32
-        #   d = 1/32
+        # We explicitly access:
+        #
+        #   gradients[0]
+        #   gradients[1]
         #   ...
-        #   d = 32/32
+        #   gradients[32]
         #
-        # Because batch_size = 1, each Tensor has
-        # one decision value.
+        # instead of relying on capture order.
         # ----------------------------------------------------
 
         gradients = []
 
-        for decision_index, grad in enumerate(
-            capture.gradients
+        for decision_index in range(
+            NUM_DECISIONS
         ):
 
             gradient_value = (
-                grad
-                .float()
-                .mean()
-                .item()
+                capture.gradients[
+                    decision_index
+                ]
             )
 
             gradients.append(
@@ -600,7 +726,7 @@ def evaluate_one_sample(
             model_input[
                 "retrieval_decision"
             ].shape
-            == (33,)
+            == (NUM_DECISIONS,)
         )
 
         # ----------------------------------------------------
