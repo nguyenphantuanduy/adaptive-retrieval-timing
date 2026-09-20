@@ -515,6 +515,8 @@ def _build_training_args(
 
         report_to="none",
 
+        disable_tqdm=True,
+
         # ----------------------------------------------------
         # Keep all dataset columns
         # ----------------------------------------------------
@@ -544,6 +546,7 @@ def _build_training_args(
         gradient_checkpointing_kwargs={
             "use_reentrant": False,
         },
+        
 
         # ----------------------------------------------------
         # Dataloader
