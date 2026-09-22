@@ -28,20 +28,24 @@
 #       └── train
 #
 #
-# Example:
+# MODES:
 #
-#   from datasets import load_dataset
+#   --mode full
+#       Generate 2-hop + 3-hop + 4-hop
 #
-#   dataset = load_dataset(
-#       "adaptive-retrieval-timing/MuSiQue-ART-Training",
-#       "2-hop",
-#   )
+#   --mode 2
+#       Generate only 2-hop
 #
-#   train = dataset["train"]
+#   --mode 3
+#       Generate only 3-hop
+#
+#   --mode 4
+#       Generate only 4-hop
 #
 # ============================================================
 
 
+import argparse
 import gc
 import json
 import random
@@ -106,9 +110,9 @@ HF_SPLIT = "train"
 # ------------------------------------------------------------
 
 BATCH_SIZE_BY_HOP = {
-    2: 8,
-    3: 4,
-    4: 4,
+    2: 16,
+    3: 8,
+    4: 8,
 }
 
 
@@ -171,6 +175,81 @@ def set_seed(
         torch.cuda.manual_seed_all(
             seed
         )
+
+
+# ============================================================
+# PARSE COMMAND-LINE MODE
+# ============================================================
+
+def parse_args():
+    """
+    Parse command-line arguments.
+
+    Supported modes:
+
+        --mode full
+        --mode 2
+        --mode 3
+        --mode 4
+    """
+
+    parser = argparse.ArgumentParser(
+        description=(
+            "MuSiQue training-set teacher "
+            "generation and Hugging Face upload."
+        )
+    )
+
+    parser.add_argument(
+        "--mode",
+        type=str,
+        choices=[
+            "full",
+            "2",
+            "3",
+            "4",
+        ],
+        default="full",
+        help=(
+            "Generation mode: "
+            "'full' for 2/3/4-hop, "
+            "or '2', '3', '4' for a single hop."
+        ),
+    )
+
+    return parser.parse_args()
+
+
+# ============================================================
+# CONVERT MODE TO HOP LIST
+# ============================================================
+
+def get_target_hops(
+    mode: str,
+):
+    """
+    Convert command-line mode into the list of hops
+    that should actually be generated.
+
+    Examples
+    --------
+    full -> [2, 3, 4]
+    2    -> [2]
+    3    -> [3]
+    4    -> [4]
+    """
+
+    if mode == "full":
+
+        return [
+            2,
+            3,
+            4,
+        ]
+
+    return [
+        int(mode)
+    ]
 
 
 # ============================================================
@@ -784,8 +863,7 @@ def generate_one_sample(
 
         # ----------------------------------------------------
         # Keep original sample.
-        #
-        # None becomes NaN when loaded by pandas.
+        # None is valid JSON and will be stored as null.
         # ----------------------------------------------------
 
         output_sample = dict(
@@ -1184,14 +1262,6 @@ def load_teacher_dataset(
     """
     Load one generated MuSiQue training JSONL file
     as a Hugging Face Dataset.
-
-    Expected file:
-
-        data/
-        teacher_generation_training/
-            musique_train_2_hop.jsonl
-            musique_train_3_hop.jsonl
-            musique_train_4_hop.jsonl
     """
 
     if hop not in CONFIGS:
@@ -1436,12 +1506,12 @@ def validate_teacher_dataset(
     )
 
     print(
-        f"  Successful       : "
+        f"  Successful      : "
         f"{len(dataset) - failed_count:,}"
     )
 
     print(
-        f"  Sample-level OOM : "
+        f"  Sample-level OOM: "
         f"{failed_count:,}"
     )
 
@@ -1634,6 +1704,10 @@ def generate_save_upload_hop(
         - failed_count
     )
 
+    sample_count = len(
+        generated_samples
+    )
+
     # ========================================================
     # CLEAN MEMORY
     # ========================================================
@@ -1647,7 +1721,7 @@ def generate_save_upload_hop(
 
     return {
         "hop": hop,
-        "samples": len(samples),
+        "samples": sample_count,
         "successful": successful_count,
         "failed": failed_count,
         "output_path": output_path,
@@ -1661,47 +1735,30 @@ def generate_save_upload_hop(
 def run_training_teacher_generation(
     model,
     tokenizer,
+    target_hops,
     batch_size_by_hop=BATCH_SIZE_BY_HOP,
     max_new_tokens=MAX_NEW_TOKENS,
     temperature=TEMPERATURE,
     top_p=TOP_P,
 ):
     """
-    Full MuSiQue training-set teacher generation
+    MuSiQue training-set teacher generation
     and Hugging Face upload.
 
-    IMPORTANT:
-        There is NO sampling.
+    There is NO sampling.
 
-    ALL valid 2-hop / 3-hop / 4-hop training samples
+    ALL valid samples belonging to target_hops
     are processed.
 
-    Hop grouping exists only to select batch size.
+    target_hops examples:
 
-    Each hop is uploaded immediately after generation:
+        [2, 3, 4] -> full
+        [2]       -> only 2-hop
+        [3]       -> only 3-hop
+        [4]       -> only 4-hop
 
-        2-hop
-            ↓
-        generate
-            ↓
-        save
-            ↓
-        validate
-            ↓
-        upload
+    Each selected hop is uploaded immediately after:
 
-        3-hop
-            ↓
-        generate
-            ↓
-        save
-            ↓
-        validate
-            ↓
-        upload
-
-        4-hop
-            ↓
         generate
             ↓
         save
@@ -1723,11 +1780,21 @@ def run_training_teacher_generation(
     )
     print("=" * 80)
 
+    print()
+
+    print(
+        "Target hops:"
+    )
+
+    print(
+        f"  {target_hops}"
+    )
+
     # ========================================================
     # VALIDATE BATCH CONFIG
     # ========================================================
 
-    for hop in (2, 3, 4):
+    for hop in target_hops:
 
         if hop not in batch_size_by_hop:
 
@@ -1809,12 +1876,12 @@ def run_training_teacher_generation(
     )
 
     # ========================================================
-    # PROCESS EACH HOP
+    # PROCESS SELECTED HOPS
     # ========================================================
 
     results = {}
 
-    for hop in (2, 3, 4):
+    for hop in target_hops:
 
         print()
         print("#" * 80)
@@ -1829,6 +1896,22 @@ def run_training_teacher_generation(
 
         hop_batch_size = (
             batch_size_by_hop[hop]
+        )
+
+        print()
+
+        print(
+            f"Hop        : {hop}"
+        )
+
+        print(
+            f"Samples    : "
+            f"{len(hop_samples):,}"
+        )
+
+        print(
+            f"Batch size : "
+            f"{hop_batch_size}"
         )
 
         # ----------------------------------------------------
@@ -1919,17 +2002,22 @@ def run_training_teacher_generation(
     print()
 
     print(
-        f"Total samples : "
+        f"Target hops  : "
+        f"{target_hops}"
+    )
+
+    print(
+        f"Total samples: "
         f"{total_samples:,}"
     )
 
     print(
-        f"Successful    : "
+        f"Successful   : "
         f"{total_successful:,}"
     )
 
     print(
-        f"Failed / null : "
+        f"Failed / null: "
         f"{total_failed:,}"
     )
 
@@ -1939,7 +2027,7 @@ def run_training_teacher_generation(
         "Uploaded configurations:"
     )
 
-    for hop in (2, 3, 4):
+    for hop in target_hops:
 
         result = results[
             hop
@@ -1980,7 +2068,7 @@ def run_training_teacher_generation(
     print("=" * 80)
 
     print(
-        "✓ ALL TRAINING DATASETS "
+        "✓ SELECTED TRAINING DATASETS "
         "GENERATED AND UPLOADED"
     )
 
@@ -1996,13 +2084,40 @@ def run_training_teacher_generation(
 if __name__ == "__main__":
 
     # ========================================================
-    # 1. SET SEED
+    # 1. PARSE COMMAND-LINE ARGUMENTS
+    # ========================================================
+
+    args = parse_args()
+
+    target_hops = get_target_hops(
+        args.mode
+    )
+
+    print()
+    print("=" * 80)
+
+    print(
+        "MuSiQue TEACHER GENERATION"
+    )
+
+    print(
+        f"Mode: {args.mode}"
+    )
+
+    print(
+        f"Target hops: {target_hops}"
+    )
+
+    print("=" * 80)
+
+    # ========================================================
+    # 2. SET SEED
     # ========================================================
 
     set_seed()
 
     # ========================================================
-    # 2. LOAD QWEN3-4B
+    # 3. LOAD QWEN3-4B
     # ========================================================
 
     model, tokenizer = (
@@ -2010,12 +2125,14 @@ if __name__ == "__main__":
     )
 
     # ========================================================
-    # 3. RUN FULL PIPELINE
+    # 4. RUN SELECTED PIPELINE
     # ========================================================
 
     run_training_teacher_generation(
         model=model,
         tokenizer=tokenizer,
+
+        target_hops=target_hops,
 
         batch_size_by_hop=(
             BATCH_SIZE_BY_HOP
@@ -2035,7 +2152,7 @@ if __name__ == "__main__":
     )
 
     # ========================================================
-    # 4. CLEAN UP
+    # 5. CLEAN UP
     # ========================================================
 
     del model
