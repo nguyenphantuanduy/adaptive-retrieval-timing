@@ -24,7 +24,7 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 
 # ============================================================
-# SAMPLE
+# SAMPLE QUESTION
 # ============================================================
 
 QUESTION = (
@@ -32,25 +32,66 @@ QUESTION = (
     "community in the city that used to be the US capitol?"
 )
 
-# This is the sentence that leads to the next hop.
-NEXT_HOP_SENTENCE = (
-    "The United States Capitol document states that before Washington, D.C. "
-    "became the capital, the U.S. government met in Philadelphia."
-)
+
+# ============================================================
+# COT SENTENCES
+#
+# Each sentence will be tested independently:
+#
+#   Q
+#   Q + S1
+#   Q + S2
+#   Q + S3
+#   Q + S4
+#
+# NOT cumulative.
+# ============================================================
+
+SENTENCES = [
+    (
+        "S1",
+        "The question asks about the founder of the Bethel branch of a "
+        "religion founded by the black community in the city that used "
+        "to be the U.S. capitol."
+    ),
+
+    (
+        "S2",
+        "To answer this, we first need to identify the city that used "
+        "to be the U.S. capitol."
+    ),
+
+    (
+        "S3",
+        "The United States Capitol document states that before Washington, "
+        "D.C. became the capital, the U.S. government met in Philadelphia."
+    ),
+
+    (
+        "S4",
+        "Thus, Philadelphia is the city in question."
+    ),
+]
+
+
+# ============================================================
+# TARGET DOCUMENT
+#
+# We are ONLY testing whether retrieval finds this document.
+# ============================================================
+
+TARGET_TITLE = "United States Capitol"
 
 
 # ============================================================
 # E5 MEAN POOLING
-# Same as R-Search
+# Same as R-Search / E5 model card
 # ============================================================
 
-def mean_pooling(last_hidden_state, attention_mask):
-    """
-    Mean pooling with padding tokens excluded.
-
-    Same logic as R-Search:
-        hidden.sum(dim=1) / attention_mask.sum(dim=1)
-    """
+def mean_pooling(
+    last_hidden_state,
+    attention_mask,
+):
 
     mask = attention_mask[..., None].bool()
 
@@ -65,7 +106,7 @@ def mean_pooling(last_hidden_state, attention_mask):
 
 
 # ============================================================
-# LOAD FAISS INDEX + CORPUS FROM HUGGING FACE
+# LOAD FAISS + CORPUS FROM HF
 # ============================================================
 
 def load_hf_artifact():
@@ -76,19 +117,18 @@ def load_hf_artifact():
 
     print(f"\nRepo: {REPO_ID}")
 
+
     # --------------------------------------------------------
-    # FAISS index
+    # FAISS
     # --------------------------------------------------------
 
-    print("\nDownloading / loading FAISS index...")
+    print("\nLoading FAISS index...")
 
     index_path = hf_hub_download(
         repo_id=REPO_ID,
         filename="e5_Flat.index",
         repo_type=REPO_TYPE,
     )
-
-    print(f"Index path: {index_path}")
 
     index = faiss.read_index(index_path)
 
@@ -100,15 +140,13 @@ def load_hf_artifact():
     # Corpus
     # --------------------------------------------------------
 
-    print("\nDownloading / loading corpus...")
+    print("\nLoading corpus...")
 
     corpus_path = hf_hub_download(
         repo_id=REPO_ID,
         filename="musique_corpus.jsonl",
         repo_type=REPO_TYPE,
     )
-
-    print(f"Corpus path: {corpus_path}")
 
     corpus = []
 
@@ -121,19 +159,20 @@ def load_hf_artifact():
         for line in f:
             corpus.append(json.loads(line))
 
+
     print(f"Corpus passages: {len(corpus)}")
 
 
     # --------------------------------------------------------
-    # Verify alignment
+    # Alignment check
     # --------------------------------------------------------
 
     if len(corpus) != index.ntotal:
 
         raise RuntimeError(
-            "\nCorpus / FAISS index mismatch!\n"
-            f"Corpus passages : {len(corpus)}\n"
-            f"FAISS vectors   : {index.ntotal}"
+            "Corpus / FAISS mismatch!\n"
+            f"Corpus: {len(corpus)}\n"
+            f"Index : {index.ntotal}"
         )
 
     print("\nCorpus / FAISS alignment: OK")
@@ -151,7 +190,7 @@ def load_e5():
     print("LOADING E5")
     print("=" * 80)
 
-    print(f"\nModel : {MODEL_NAME}")
+    print(f"Model : {MODEL_NAME}")
     print(f"Device: {DEVICE}")
 
     tokenizer = AutoTokenizer.from_pretrained(
@@ -179,14 +218,9 @@ def encode_query(
     tokenizer,
     model,
 ):
-    """
-    Encode one query using the same E5 procedure
-    used for retrieval-index construction.
 
-    Query format:
-        query: <query>
-    """
-
+    # E5 retrieval convention:
+    # query: <text>
     text = f"query: {query}"
 
     inputs = tokenizer(
@@ -212,8 +246,7 @@ def encode_query(
         inputs["attention_mask"],
     )
 
-    # Same as R-Search:
-    # F.normalize(embeddings, p=2, dim=1)
+    # L2 normalization
     embedding = F.normalize(
         embedding,
         p=2,
@@ -233,18 +266,17 @@ def search(
     corpus,
     tokenizer,
     model,
-    top_k=TOP_K,
 ):
 
     query_embedding = encode_query(
-        query=query,
-        tokenizer=tokenizer,
-        model=model,
+        query,
+        tokenizer,
+        model,
     )
 
     scores, indices = index.search(
         query_embedding,
-        top_k,
+        TOP_K,
     )
 
     results = []
@@ -273,117 +305,63 @@ def search(
 
 
 # ============================================================
-# PRINT RESULTS
+# CHECK TARGET
 # ============================================================
 
-def print_results(
-    test_name,
+def find_target(
+    results,
+    target_title,
+):
+
+    for result in results:
+
+        if result["title"] == target_title:
+            return result
+
+    return None
+
+
+# ============================================================
+# PRINT TEST
+# ============================================================
+
+def print_test(
+    name,
     query,
     results,
 ):
 
     print("\n")
     print("=" * 80)
-    print(test_name)
+    print(name)
     print("=" * 80)
 
     print("\nQUERY:")
     print(query)
 
-    print("\nTOP RESULTS:")
+    print("\nTOP-3:")
 
     for result in results:
 
-        print("\n" + "-" * 80)
-
-        print(f"Rank  : {result['rank']}")
-        print(f"Score : {result['score']:.6f}")
-        print(f"Index : {result['index']}")
-        print(f"ID    : {result['id']}")
-        print(f"Title : {result['title']}")
-
-        print("\nContent:")
-        print(result["content"])
-
-
-# ============================================================
-# PRINT COMPARISON
-# ============================================================
-
-def print_comparison(
-    results_question,
-    results_question_plus_sentence,
-):
-
-    print("\n")
-    print("=" * 80)
-    print("RETRIEVAL COMPARISON")
-    print("=" * 80)
-
-    print("\nQuestion only:")
-
-    for result in results_question:
-
         print(
-            f"  Rank {result['rank']} | "
-            f"ID={result['id']} | "
-            f"Score={result['score']:.6f} | "
-            f"Title={result['title']}"
+            f"\nRank {result['rank']}"
         )
 
-
-    print("\nQuestion + 1 sentence:")
-
-    for result in results_question_plus_sentence:
-
         print(
-            f"  Rank {result['rank']} | "
-            f"ID={result['id']} | "
-            f"Score={result['score']:.6f} | "
-            f"Title={result['title']}"
+            f"Score : {result['score']:.6f}"
         )
 
+        print(
+            f"ID    : {result['id']}"
+        )
 
-    # --------------------------------------------------------
-    # Compare top-k IDs
-    # --------------------------------------------------------
+        print(
+            f"Title : {result['title']}"
+        )
 
-    ids_question = [
-        result["id"]
-        for result in results_question
-    ]
-
-    ids_question_plus_sentence = [
-        result["id"]
-        for result in results_question_plus_sentence
-    ]
-
-    shared_ids = (
-        set(ids_question)
-        & set(ids_question_plus_sentence)
-    )
-
-    print("\nTop-k ID comparison:")
-
-    print(
-        f"  Question only          : "
-        f"{ids_question}"
-    )
-
-    print(
-        f"  Question + 1 sentence  : "
-        f"{ids_question_plus_sentence}"
-    )
-
-    print(
-        f"  Shared documents       : "
-        f"{sorted(shared_ids)}"
-    )
-
-    print(
-        f"  Number shared          : "
-        f"{len(shared_ids)}/{TOP_K}"
-    )
+        print(
+            f"Content:\n{result['content']}"
+        )
 
 
 # ============================================================
@@ -393,7 +371,7 @@ def print_comparison(
 def main():
 
     # --------------------------------------------------------
-    # Load shared retrieval artifact
+    # Load retrieval artifact
     # --------------------------------------------------------
 
     index, corpus = load_hf_artifact()
@@ -406,64 +384,184 @@ def main():
     tokenizer, model = load_e5()
 
 
+    # --------------------------------------------------------
+    # Store all results
+    # --------------------------------------------------------
+
+    all_results = []
+
+
     # ========================================================
-    # TEST 1
-    # Question only
+    # TEST 0
+    # QUESTION ONLY
     # ========================================================
 
-    results_question = search(
-        query=QUESTION,
+    query = QUESTION
+
+    results = search(
+        query=query,
         index=index,
         corpus=corpus,
         tokenizer=tokenizer,
         model=model,
-        top_k=TOP_K,
     )
 
-    print_results(
-        test_name="TEST 1 — QUESTION ONLY",
-        query=QUESTION,
-        results=results_question,
+    print_test(
+        name="TEST 0 — QUESTION ONLY",
+        query=query,
+        results=results,
     )
 
-
-    # ========================================================
-    # TEST 2
-    # Question + 1 sentence leading to next hop
-    # ========================================================
-
-    question_plus_sentence = (
-        QUESTION
-        + " "
-        + NEXT_HOP_SENTENCE
+    target = find_target(
+        results,
+        TARGET_TITLE,
     )
 
-    results_question_plus_sentence = search(
-        query=question_plus_sentence,
-        index=index,
-        corpus=corpus,
-        tokenizer=tokenizer,
-        model=model,
-        top_k=TOP_K,
-    )
-
-    print_results(
-        test_name="TEST 2 — QUESTION + 1 NEXT-HOP SENTENCE",
-        query=question_plus_sentence,
-        results=results_question_plus_sentence,
+    all_results.append(
+        {
+            "name": "Q",
+            "sentence": None,
+            "results": results,
+            "target": target,
+        }
     )
 
 
     # ========================================================
-    # COMPARISON
+    # TEST 1..N
+    #
+    # Each sentence is independently appended to Q.
+    #
+    # Q + S1
+    # Q + S2
+    # Q + S3
+    # Q + S4
+    #
+    # NOT cumulative.
     # ========================================================
 
-    print_comparison(
-        results_question=results_question,
-        results_question_plus_sentence=(
-            results_question_plus_sentence
-        ),
+    for sentence_name, sentence in SENTENCES:
+
+        query = QUESTION + " " + sentence
+
+        results = search(
+            query=query,
+            index=index,
+            corpus=corpus,
+            tokenizer=tokenizer,
+            model=model,
+        )
+
+        print_test(
+            name=(
+                f"TEST — QUESTION + {sentence_name}"
+            ),
+            query=query,
+            results=results,
+        )
+
+        target = find_target(
+            results,
+            TARGET_TITLE,
+        )
+
+        all_results.append(
+            {
+                "name": f"Q + {sentence_name}",
+                "sentence": sentence,
+                "results": results,
+                "target": target,
+            }
+        )
+
+
+    # ========================================================
+    # SUMMARY
+    # ========================================================
+
+    print("\n")
+    print("=" * 80)
+    print("HOP-1 TARGET SUMMARY")
+    print("=" * 80)
+
+    print(
+        f"\nTarget document: {TARGET_TITLE}"
     )
+
+    print(
+        f"Top-K: {TOP_K}"
+    )
+
+
+    for item in all_results:
+
+        print("\n" + "-" * 80)
+
+        print(
+            f"Query state: {item['name']}"
+        )
+
+        target = item["target"]
+
+        if target is None:
+
+            print(
+                "TARGET FOUND: NO"
+            )
+
+        else:
+
+            print(
+                "TARGET FOUND: YES"
+            )
+
+            print(
+                f"Rank : {target['rank']}"
+            )
+
+            print(
+                f"Score: {target['score']:.6f}"
+            )
+
+            print(
+                f"ID   : {target['id']}"
+            )
+
+
+    # ========================================================
+    # RANK TRANSITION
+    # ========================================================
+
+    print("\n")
+    print("=" * 80)
+    print("TARGET RANK TRANSITION")
+    print("=" * 80)
+
+    print(
+        "\nState                      Rank    Score"
+    )
+
+    print(
+        "-" * 80
+    )
+
+    for item in all_results:
+
+        target = item["target"]
+
+        if target is None:
+
+            print(
+                f"{item['name']:<25} NOT FOUND"
+            )
+
+        else:
+
+            print(
+                f"{item['name']:<25} "
+                f"{target['rank']:<7} "
+                f"{target['score']:.6f}"
+            )
 
 
 # ============================================================
