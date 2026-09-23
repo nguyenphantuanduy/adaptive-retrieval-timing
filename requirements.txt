@@ -5,3 +5,7 @@ gdown
 accelerate
 sentencesplit
 spacy
+faiss-cpu
+huggingface_hub
+numpy
+tqdm
