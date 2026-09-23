@@ -7,8 +7,9 @@ from typing import cast
 import faiss
 import numpy as np
 import torch
+
 from tqdm import tqdm
-from transformers import AutoTokenizer, AutoModel, AutoConfig
+from transformers import AutoTokenizer, AutoModel
 from huggingface_hub import HfApi
 
 
@@ -25,6 +26,8 @@ DEFAULT_REPO_ID = (
 DEFAULT_MAX_LENGTH = 512
 DEFAULT_BATCH_SIZE = 512
 
+DEFAULT_FAISS_TYPE = "Flat"
+
 
 # ============================================================
 # MODEL
@@ -34,10 +37,24 @@ def load_model(
     model_path: str,
     use_fp16: bool = False,
 ):
-    model_config = AutoConfig.from_pretrained(
-        model_path,
-        trust_remote_code=True,
-    )
+    """
+    Load E5 model and tokenizer.
+
+    This follows the R-Search implementation:
+
+        model.eval()
+        model.cuda()
+
+    FP16 is optional, but disabled by default for
+    closer numerical reproduction of R-Search.
+    """
+
+    print("=" * 80)
+    print("LOADING MODEL")
+    print("=" * 80)
+
+    print(f"Model: {model_path}")
+    print(f"FP16:  {use_fp16}")
 
     model = AutoModel.from_pretrained(
         model_path,
@@ -56,6 +73,11 @@ def load_model(
         trust_remote_code=True,
     )
 
+    print()
+    print("Model loaded successfully.")
+    print(f"CUDA device: {torch.cuda.get_device_name(0)}")
+    print()
+
     return model, tokenizer
 
 
@@ -69,6 +91,10 @@ def pooling(
     attention_mask=None,
     pooling_method="mean",
 ):
+    """
+    Same pooling implementation used by R-Search.
+    """
+
     if pooling_method == "mean":
 
         last_hidden = last_hidden_state.masked_fill(
@@ -92,7 +118,7 @@ def pooling(
     else:
 
         raise NotImplementedError(
-            "Pooling method not implemented!"
+            f"Pooling method not implemented: {pooling_method}"
         )
 
 
@@ -104,7 +130,7 @@ def load_corpus(corpus_path: str):
     """
     Load the already-built MuSiQue corpus.
 
-    Expected JSONL:
+    Expected format:
 
     {
         "id": 0,
@@ -133,7 +159,16 @@ def load_corpus(corpus_path: str):
             desc="Loading corpus",
         ):
 
+            line = line.strip()
+
+            if not line:
+                continue
+
             item = json.loads(line)
+
+            # ------------------------------------------------
+            # Prefer pre-built R-Search document
+            # ------------------------------------------------
 
             if "document" in item:
 
@@ -181,26 +216,27 @@ def encode_all(
     corpus,
     encoder,
     tokenizer,
-    retrieval_method="e5",
-    batch_size=512,
-    max_length=512,
+    batch_size=DEFAULT_BATCH_SIZE,
+    max_length=DEFAULT_MAX_LENGTH,
 ):
     """
     Encode the entire corpus.
 
-    Intentionally follows the R-Search implementation:
+    This intentionally follows the R-Search dense indexing
+    implementation:
 
         all_embeddings = []
 
         for batch:
+            add "passage: "
             tokenize
             encode
             mean pooling
-            L2 normalize
-            CPU -> NumPy
+            L2 normalization
+            GPU -> CPU -> NumPy
             append
 
-        np.concatenate(all_embeddings)
+        np.concatenate(all_embeddings, axis=0)
         astype(np.float32)
     """
 
@@ -208,7 +244,19 @@ def encode_all(
     print("ENCODING ALL PASSAGES")
     print("=" * 80)
 
+    print(f"Batch size:  {batch_size}")
+    print(f"Max length:  {max_length}")
+    print(f"Prefix:      passage: ")
+    print()
+
     all_embeddings = []
+
+    num_batches = (
+        len(corpus) + batch_size - 1
+    ) // batch_size
+
+    print(f"Total batches: {num_batches:,}")
+    print()
 
     for start_idx in tqdm(
         range(
@@ -224,6 +272,10 @@ def encode_all(
             len(corpus),
         )
 
+        # ----------------------------------------------------
+        # Get documents
+        # ----------------------------------------------------
+
         batch_data = [
             item["document"]
             for item in corpus[
@@ -232,15 +284,13 @@ def encode_all(
         ]
 
         # ----------------------------------------------------
-        # EXACT E5 PREFIX USED BY R-SEARCH
+        # EXACT E5 PASSAGE PREFIX USED BY R-SEARCH
         # ----------------------------------------------------
 
-        if retrieval_method == "e5":
-
-            batch_data = [
-                f"passage: {doc}"
-                for doc in batch_data
-            ]
+        batch_data = [
+            f"passage: {doc}"
+            for doc in batch_data
+        ]
 
         # ----------------------------------------------------
         # TOKENIZATION
@@ -283,12 +333,10 @@ def encode_all(
         # L2 NORMALIZATION
         # ----------------------------------------------------
 
-        if "dpr" not in retrieval_method:
-
-            embeddings = torch.nn.functional.normalize(
-                embeddings,
-                dim=-1,
-            )
+        embeddings = torch.nn.functional.normalize(
+            embeddings,
+            dim=-1,
+        )
 
         # ----------------------------------------------------
         # GPU -> CPU -> NUMPY
@@ -348,14 +396,19 @@ def save_embeddings(
     embedding_path,
 ):
     """
-    Save the final embedding matrix as a float32 memmap.
+    Save embeddings as float32 NumPy memmap.
 
-    This happens AFTER np.concatenate(), matching R-Search.
+    This happens AFTER np.concatenate(), matching
+    the R-Search implementation.
     """
 
     print("=" * 80)
     print("SAVING EMBEDDINGS")
     print("=" * 80)
+
+    print(
+        f"Path: {embedding_path}"
+    )
 
     memmap = np.memmap(
         embedding_path,
@@ -380,9 +433,11 @@ def save_embeddings(
             len(all_embeddings),
         )
 
-        memmap[start_idx:end_idx] = (
-            all_embeddings[start_idx:end_idx]
-        )
+        memmap[
+            start_idx:end_idx
+        ] = all_embeddings[
+            start_idx:end_idx
+        ]
 
     memmap.flush()
 
@@ -394,9 +449,18 @@ def save_embeddings(
     )
 
     print()
-    print(f"Embedding file: {embedding_path}")
-    print(f"Shape: {all_embeddings.shape}")
-    print(f"Size: {size_mb:.2f} MB")
+    print(
+        f"Embedding shape: {all_embeddings.shape}"
+    )
+
+    print(
+        f"Embedding dtype: {all_embeddings.dtype}"
+    )
+
+    print(
+        f"Embedding size:  {size_mb:.2f} MB"
+    )
+
     print()
 
 
@@ -407,10 +471,10 @@ def save_embeddings(
 def build_faiss_index(
     all_embeddings,
     index_path,
+    faiss_type="Flat",
 ):
     """
-    Build exactly the default dense FAISS index used by
-    R-Search:
+    Build the default dense FAISS index used by R-Search:
 
         faiss.index_factory(
             dim,
@@ -418,7 +482,7 @@ def build_faiss_index(
             faiss.METRIC_INNER_PRODUCT
         )
 
-    This is IndexFlatIP.
+    This produces IndexFlatIP.
     """
 
     print("=" * 80)
@@ -427,19 +491,41 @@ def build_faiss_index(
 
     dimension = all_embeddings.shape[-1]
 
-    print(f"Number of vectors: {len(all_embeddings):,}")
-    print(f"Dimension: {dimension}")
-    print("FAISS type: Flat")
-    print("Metric: Inner Product")
+    print(
+        f"Number of vectors: {len(all_embeddings):,}"
+    )
+
+    print(
+        f"Dimension:         {dimension}"
+    )
+
+    print(
+        f"FAISS type:        {faiss_type}"
+    )
+
+    print(
+        "Metric:             Inner Product"
+    )
+
     print()
+
+    # --------------------------------------------------------
+    # Same as R-Search
+    # --------------------------------------------------------
 
     faiss_index = faiss.index_factory(
         dimension,
-        "Flat",
+        faiss_type,
         faiss.METRIC_INNER_PRODUCT,
     )
 
-    # Same logic as R-Search.
+    # --------------------------------------------------------
+    # Flat does not require training.
+    #
+    # Keep the generic R-Search logic anyway so this remains
+    # compatible with other FAISS factory types.
+    # --------------------------------------------------------
+
     if not faiss_index.is_trained:
 
         print("Training FAISS index...")
@@ -448,7 +534,9 @@ def build_faiss_index(
             all_embeddings
         )
 
-    print("Adding embeddings to FAISS...")
+    print(
+        "Adding embeddings to FAISS..."
+    )
 
     faiss_index.add(
         all_embeddings
@@ -461,13 +549,14 @@ def build_faiss_index(
     if faiss_index.ntotal != len(
         all_embeddings
     ):
+
         raise RuntimeError(
             "FAISS index size does not match "
             "embedding count."
         )
 
     # --------------------------------------------------------
-    # SAVE
+    # Save
     # --------------------------------------------------------
 
     faiss.write_index(
@@ -481,8 +570,14 @@ def build_faiss_index(
     )
 
     print()
-    print(f"Index file: {index_path}")
-    print(f"Index size: {size_mb:.2f} MB")
+    print(
+        f"Index file: {index_path}"
+    )
+
+    print(
+        f"Index size: {size_mb:.2f} MB"
+    )
+
     print()
 
     return faiss_index
@@ -497,12 +592,16 @@ def sanity_check(
     embeddings,
     index,
 ):
+    """
+    Verify corpus / embedding / FAISS consistency.
+    """
+
     print("=" * 80)
     print("SANITY CHECK")
     print("=" * 80)
 
     # --------------------------------------------------------
-    # SIZE
+    # SIZE CHECK
     # --------------------------------------------------------
 
     if len(corpus) != len(embeddings):
@@ -531,7 +630,28 @@ def sanity_check(
         f"FAISS:      {index.ntotal:,}"
     )
 
-    print("✓ Sizes match")
+    print(
+        "✓ Sizes match"
+    )
+
+    # --------------------------------------------------------
+    # DTYPE
+    # --------------------------------------------------------
+
+    print()
+    print(
+        f"Embedding dtype: {embeddings.dtype}"
+    )
+
+    if embeddings.dtype != np.float32:
+
+        raise RuntimeError(
+            "Embeddings are not float32."
+        )
+
+    print(
+        "✓ Float32 verified"
+    )
 
     # --------------------------------------------------------
     # NORMALIZATION
@@ -578,11 +698,13 @@ def sanity_check(
         )
 
     # --------------------------------------------------------
-    # SELF RETRIEVAL TEST
+    # SELF RETRIEVAL
     # --------------------------------------------------------
 
     print()
-    print("Testing FAISS retrieval using passage #0...")
+    print(
+        "Testing FAISS retrieval using passage #0..."
+    )
 
     query_embedding = np.asarray(
         embeddings[0:1],
@@ -614,8 +736,25 @@ def sanity_check(
             f"title={corpus[idx]['title']}"
         )
 
-    print()
-    print("✓ FAISS retrieval works")
+    # --------------------------------------------------------
+    # Passage #0 should retrieve itself at rank 1.
+    # --------------------------------------------------------
+
+    if indices[0][0] != 0:
+
+        print()
+        print(
+            "WARNING: passage #0 was not the "
+            "top-1 self retrieval result."
+        )
+
+    else:
+
+        print()
+        print(
+            "✓ Self retrieval verified"
+        )
+
     print()
 
 
@@ -629,7 +768,12 @@ def save_metadata(
     model_name,
     max_length,
     batch_size,
+    faiss_type,
 ):
+    """
+    Save reproducibility metadata.
+    """
+
     metadata = {
         "artifact": (
             "MuSiQue-ART-E5-Retrieval-Index"
@@ -653,9 +797,10 @@ def save_metadata(
 
         "faiss": {
             "index_type": "IndexFlatIP",
-            "factory": "Flat",
+            "factory": faiss_type,
             "metric": "inner_product",
             "normalized_embeddings": True,
+            "gpu_build": False,
         },
 
         "document_format": (
@@ -704,21 +849,652 @@ def save_readme(
     path,
     corpus_size,
     model_name,
+    max_length,
+    batch_size,
 ):
-    readme = f"""# MuSiQue-ART-E5-Retrieval-Index
+    """
+    Save artifact documentation.
+    """
 
-Frozen retrieval artifacts for the Adaptive Retrieval Timing (ART)
-project and retrieval baselines on MuSiQue v1.0.
+    readme = (
+        "# MuSiQue-ART-E5-Retrieval-Index\n\n"
 
-## Corpus
+        "Frozen retrieval artifacts for the Adaptive Retrieval "
+        "Timing (ART) project and retrieval baselines on MuSiQue v1.0.\n\n"
 
-Number of passages:
+        "## Corpus\n\n"
 
-`{corpus_size:,}`
+        f"Number of passages: `{corpus_size:,}`\n\n"
 
-The corpus follows the MuSiQue corpus construction used by R-Search.
+        "The corpus follows the MuSiQue corpus construction used by "
+        "R-Search.\n\n"
 
-Duplicate passages are removed using:
+        "Each paragraph becomes one retrieval document.\n\n"
 
-```text
-title + " " + paragraph_text
+        "Duplicate passages are removed using:\n\n"
+
+        "```text\n"
+        "title + \" \" + paragraph_text\n"
+        "```\n\n"
+
+        "The document representation is:\n\n"
+
+        "```text\n"
+        "\"<title>\"\n"
+        "<paragraph_text>\n"
+        "```\n\n"
+
+        "The E5 passage prefix is NOT stored in the corpus. "
+        "It is added during embedding.\n\n"
+
+        "## Embedding\n\n"
+
+        f"Model: `{model_name}`\n\n"
+
+        f"Batch size: `{batch_size}`\n\n"
+
+        f"Maximum sequence length: `{max_length}`\n\n"
+
+        "E5 input format:\n\n"
+
+        "```text\n"
+        "passage: \"<title>\"\n"
+        "<paragraph_text>\n"
+        "```\n\n"
+
+        "Configuration:\n\n"
+
+        "- Pooling: mean pooling\n"
+        "- Normalization: L2\n"
+        "- Data type: float32\n"
+        "- Passage prefix: `passage: `\n"
+        "- Query prefix: `query: `\n\n"
+
+        "The tokenizer uses truncation at 512 tokens, matching "
+        "the R-Search implementation.\n\n"
+
+        "## FAISS\n\n"
+
+        "Index type: `IndexFlatIP`\n\n"
+
+        "Factory: `Flat`\n\n"
+
+        "Metric: Inner Product\n\n"
+
+        "Embeddings are L2-normalized, so inner product corresponds "
+        "to cosine similarity.\n\n"
+
+        "FAISS is built on CPU, matching the default R-Search "
+        "configuration when `--faiss_gpu` is not enabled.\n\n"
+
+        "## Query Encoding\n\n"
+
+        "Queries must use the E5 query prefix:\n\n"
+
+        "```text\n"
+        "query: <question>\n"
+        "```\n\n"
+
+        "Then apply the same mean pooling and L2 normalization "
+        "before searching the FAISS index.\n\n"
+
+        "For example:\n\n"
+
+        "```python\n"
+        "query_text = \"query: Who was the director of ...?\"\n\n"
+        "inputs = tokenizer(\n"
+        "    [query_text],\n"
+        "    padding=True,\n"
+        "    truncation=True,\n"
+        "    return_tensors=\"pt\",\n"
+        "    max_length=512,\n"
+        ")\n\n"
+        "with torch.no_grad():\n"
+        "    output = model(**inputs, return_dict=True)\n\n"
+        "# mean pooling + L2 normalization\n"
+        "# then:\n"
+        "scores, indices = index.search(query_embedding, k=3)\n"
+        "```\n\n"
+
+        "## Corpus / Index Alignment\n\n"
+
+        "FAISS vector position corresponds directly to the same "
+        "document position in `musique_corpus.jsonl`.\n\n"
+
+        "Therefore, if FAISS returns index `12345`, the corresponding "
+        "document is line/document position `12345` in the corpus.\n\n"
+
+        "## Files\n\n"
+
+        "- `musique_corpus.jsonl` — R-Search-compatible MuSiQue corpus\n"
+        "- `emb_e5.memmap` — float32 E5 embeddings\n"
+        "- `e5_Flat.index` — FAISS IndexFlatIP\n"
+        "- `metadata.json` — reproducibility metadata\n"
+        "- `README.md` — artifact documentation\n\n"
+
+        "## Compatibility\n\n"
+
+        "This artifact is intended to be shared across ART and "
+        "retrieval baselines so that all systems use the same:\n\n"
+
+        "- corpus\n"
+        "- document representation\n"
+        "- E5 encoder\n"
+        "- embedding preprocessing\n"
+        "- FAISS index\n"
+        "- retrieval metric\n\n"
+
+        "The retrieval backend is therefore frozen for downstream "
+        "experiments.\n"
+    )
+
+    with open(
+        path,
+        "w",
+        encoding="utf-8",
+    ) as f:
+
+        f.write(readme)
+
+    print(
+        f"README saved: {path}"
+    )
+
+
+# ============================================================
+# UPLOAD TO HUGGING FACE
+# ============================================================
+
+def upload_to_huggingface(
+    output_dir,
+    repo_id,
+):
+    """
+    Upload the complete retrieval artifact directory
+    to a Hugging Face Dataset repository.
+
+    Authentication should be done beforehand with:
+
+        hf auth login
+
+    or through an existing HF_TOKEN environment variable.
+    """
+
+    print("=" * 80)
+    print("UPLOADING TO HUGGING FACE")
+    print("=" * 80)
+
+    print(
+        f"Repository: {repo_id}"
+    )
+
+    api = HfApi()
+
+    # --------------------------------------------------------
+    # Create repository if it does not exist.
+    # --------------------------------------------------------
+
+    api.create_repo(
+        repo_id=repo_id,
+        repo_type="dataset",
+        exist_ok=True,
+    )
+
+    print(
+        "\nUploading files..."
+    )
+
+    api.upload_folder(
+        folder_path=output_dir,
+        repo_id=repo_id,
+        repo_type="dataset",
+        commit_message=(
+            "Add MuSiQue E5 retrieval index and embeddings"
+        ),
+    )
+
+    print()
+    print("=" * 80)
+    print("UPLOAD COMPLETE")
+    print("=" * 80)
+
+    print(
+        f"https://huggingface.co/datasets/{repo_id}"
+    )
+
+    print()
+
+
+# ============================================================
+# MAIN
+# ============================================================
+
+def main():
+
+    parser = argparse.ArgumentParser(
+        description=(
+            "Build R-Search-compatible MuSiQue "
+            "E5 + FAISS retrieval artifacts."
+        )
+    )
+
+    # --------------------------------------------------------
+    # Corpus
+    # --------------------------------------------------------
+
+    parser.add_argument(
+        "--corpus_path",
+        type=str,
+        required=True,
+        help=(
+            "Path to musique_corpus.jsonl"
+        ),
+    )
+
+    # --------------------------------------------------------
+    # Output
+    # --------------------------------------------------------
+
+    parser.add_argument(
+        "--output_dir",
+        type=str,
+        default="./MuSiQue-ART-E5-Retrieval-Index",
+        help=(
+            "Local output directory."
+        ),
+    )
+
+    # --------------------------------------------------------
+    # Model
+    # --------------------------------------------------------
+
+    parser.add_argument(
+        "--model_path",
+        type=str,
+        default=DEFAULT_MODEL,
+    )
+
+    # --------------------------------------------------------
+    # R-Search parameters
+    # --------------------------------------------------------
+
+    parser.add_argument(
+        "--max_length",
+        type=int,
+        default=DEFAULT_MAX_LENGTH,
+    )
+
+    parser.add_argument(
+        "--batch_size",
+        type=int,
+        default=DEFAULT_BATCH_SIZE,
+    )
+
+    # --------------------------------------------------------
+    # Optional FP16
+    #
+    # Disabled by default because the goal is to stay close
+    # to the default R-Search FP32 behavior.
+    # --------------------------------------------------------
+
+    parser.add_argument(
+        "--use_fp16",
+        action="store_true",
+        default=False,
+        help=(
+            "Use FP16 E5 inference. "
+            "Not recommended for exact R-Search-style "
+            "numerical reproduction."
+        ),
+    )
+
+    # --------------------------------------------------------
+    # Hugging Face
+    # --------------------------------------------------------
+
+    parser.add_argument(
+        "--repo_id",
+        type=str,
+        default=DEFAULT_REPO_ID,
+    )
+
+    parser.add_argument(
+        "--upload",
+        action="store_true",
+        default=False,
+        help=(
+            "Upload the complete output directory "
+            "to the Hugging Face Dataset repository."
+        ),
+    )
+
+    args = parser.parse_args()
+
+    # ========================================================
+    # START
+    # ========================================================
+
+    print()
+    print("=" * 80)
+    print("MuSiQue E5 + FAISS INDEX BUILDER")
+    print("=" * 80)
+    print()
+
+    print(
+        f"Model:       {args.model_path}"
+    )
+
+    print(
+        f"Corpus:      {args.corpus_path}"
+    )
+
+    print(
+        f"Output:      {args.output_dir}"
+    )
+
+    print(
+        f"Batch size:  {args.batch_size}"
+    )
+
+    print(
+        f"Max length:  {args.max_length}"
+    )
+
+    print(
+        f"FP16:        {args.use_fp16}"
+    )
+
+    print(
+        f"FAISS:       IndexFlatIP / CPU"
+    )
+
+    print(
+        f"Upload:      {args.upload}"
+    )
+
+    print()
+
+    # ========================================================
+    # CHECK CUDA
+    # ========================================================
+
+    if not torch.cuda.is_available():
+
+        raise RuntimeError(
+            "CUDA is not available. "
+            "E5 indexing is configured to run on GPU."
+        )
+
+    print(
+        f"GPU: {torch.cuda.get_device_name(0)}"
+    )
+
+    print()
+
+    # ========================================================
+    # PREPARE OUTPUT DIRECTORY
+    # ========================================================
+
+    os.makedirs(
+        args.output_dir,
+        exist_ok=True,
+    )
+
+    embedding_path = os.path.join(
+        args.output_dir,
+        "emb_e5.memmap",
+    )
+
+    index_path = os.path.join(
+        args.output_dir,
+        "e5_Flat.index",
+    )
+
+    corpus_output_path = os.path.join(
+        args.output_dir,
+        "musique_corpus.jsonl",
+    )
+
+    metadata_path = os.path.join(
+        args.output_dir,
+        "metadata.json",
+    )
+
+    readme_path = os.path.join(
+        args.output_dir,
+        "README.md",
+    )
+
+    # ========================================================
+    # LOAD CORPUS
+    # ========================================================
+
+    corpus = load_corpus(
+        args.corpus_path
+    )
+
+    if len(corpus) == 0:
+
+        raise RuntimeError(
+            "Corpus is empty."
+        )
+
+    # ========================================================
+    # VERIFY IDS / ORDER
+    # ========================================================
+
+    print("=" * 80)
+    print("VERIFYING CORPUS")
+    print("=" * 80)
+
+    for expected_id, item in enumerate(
+        corpus
+    ):
+
+        if item["id"] != expected_id:
+
+            raise RuntimeError(
+                "Corpus IDs are not sequential. "
+                f"Expected {expected_id}, "
+                f"got {item['id']}."
+            )
+
+    print(
+        "✓ IDs are sequential."
+    )
+
+    print(
+        "✓ Corpus order is stable."
+    )
+
+    print()
+
+    # ========================================================
+    # LOAD MODEL
+    # ========================================================
+
+    encoder, tokenizer = load_model(
+        model_path=args.model_path,
+        use_fp16=args.use_fp16,
+    )
+
+    # ========================================================
+    # ENCODE
+    # ========================================================
+
+    all_embeddings = encode_all(
+        corpus=corpus,
+        encoder=encoder,
+        tokenizer=tokenizer,
+        batch_size=args.batch_size,
+        max_length=args.max_length,
+    )
+
+    # ========================================================
+    # VERIFY EMBEDDING SHAPE
+    # ========================================================
+
+    if all_embeddings.shape[0] != len(corpus):
+
+        raise RuntimeError(
+            "Embedding count does not match corpus size."
+        )
+
+    if all_embeddings.shape[1] != 768:
+
+        raise RuntimeError(
+            "Unexpected E5 embedding dimension: "
+            f"{all_embeddings.shape[1]}"
+        )
+
+    # ========================================================
+    # SAVE EMBEDDINGS
+    # ========================================================
+
+    save_embeddings(
+        all_embeddings=all_embeddings,
+        embedding_path=embedding_path,
+    )
+
+    # ========================================================
+    # BUILD FAISS
+    # ========================================================
+
+    faiss_index = build_faiss_index(
+        all_embeddings=all_embeddings,
+        index_path=index_path,
+        faiss_type=DEFAULT_FAISS_TYPE,
+    )
+
+    # ========================================================
+    # SANITY CHECK
+    # ========================================================
+
+    sanity_check(
+        corpus=corpus,
+        embeddings=all_embeddings,
+        index=faiss_index,
+    )
+
+    # ========================================================
+    # COPY CORPUS
+    # ========================================================
+
+    print("=" * 80)
+    print("COPYING CORPUS")
+    print("=" * 80)
+
+    shutil.copy2(
+        args.corpus_path,
+        corpus_output_path,
+    )
+
+    print(
+        f"Corpus copied to: {corpus_output_path}"
+    )
+
+    print()
+
+    # ========================================================
+    # SAVE METADATA
+    # ========================================================
+
+    save_metadata(
+        path=metadata_path,
+        corpus=corpus,
+        model_name=args.model_path,
+        max_length=args.max_length,
+        batch_size=args.batch_size,
+        faiss_type=DEFAULT_FAISS_TYPE,
+    )
+
+    # ========================================================
+    # SAVE README
+    # ========================================================
+
+    save_readme(
+        path=readme_path,
+        corpus_size=len(corpus),
+        model_name=args.model_path,
+        max_length=args.max_length,
+        batch_size=args.batch_size,
+    )
+
+    # ========================================================
+    # FREE LARGE OBJECTS
+    # ========================================================
+
+    del all_embeddings
+    del faiss_index
+    del corpus
+    del encoder
+    del tokenizer
+
+    torch.cuda.empty_cache()
+
+    # ========================================================
+    # LOCAL SUMMARY
+    # ========================================================
+
+    print("=" * 80)
+    print("LOCAL ARTIFACT COMPLETE")
+    print("=" * 80)
+
+    for filename in sorted(
+        os.listdir(args.output_dir)
+    ):
+
+        filepath = os.path.join(
+            args.output_dir,
+            filename,
+        )
+
+        if os.path.isfile(filepath):
+
+            size_mb = (
+                os.path.getsize(filepath)
+                / (1024 ** 2)
+            )
+
+            print(
+                f"{filename:<30} "
+                f"{size_mb:>10.2f} MB"
+            )
+
+    print()
+
+    # ========================================================
+    # UPLOAD
+    # ========================================================
+
+    if args.upload:
+
+        upload_to_huggingface(
+            output_dir=args.output_dir,
+            repo_id=args.repo_id,
+        )
+
+    else:
+
+        print("=" * 80)
+        print("UPLOAD SKIPPED")
+        print("=" * 80)
+
+        print(
+            "Use --upload to upload the artifact "
+            "to Hugging Face."
+        )
+
+    print()
+    print("=" * 80)
+    print("DONE")
+    print("=" * 80)
+    print()
+
+
+# ============================================================
+# ENTRY POINT
+# ============================================================
+
+if __name__ == "__main__":
+    main()
