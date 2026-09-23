@@ -1,3 +1,4 @@
+
 import json
 
 import faiss
@@ -24,56 +25,59 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 
 # ============================================================
-# COT SENTENCES
+# TEST CASES
 #
-# Each sentence is tested independently.
+# IMPORTANT:
+# Each retrieval query is EXACTLY ONE CoT SENTENCE.
 #
-#   S1
-#   S2
-#   S3
-#   S4
+# No question.
+# No previous sentences.
+# No cumulative context.
 #
-# NO QUESTION
-# NO CUMULATION
+# target_title = document expected to be retrieved.
+# Use None when there is no specific retrieval target.
 # ============================================================
 
-SENTENCES = [
-    (
-        "S1",
-        "The question asks about the founder of the Bethel branch of a "
-        "religion founded by the black community in the city that used "
-        "to be the U.S. capitol."
-    ),
+TEST_CASES = [
 
-    (
-        "S2",
-        "To answer this, we first need to identify the city that used "
-        "to be the U.S. capitol."
-    ),
+    {
+        "name": "Hop 1",
+        "sentence": (
+            "To answer this, we first need to identify the city that used "
+            "to be the U.S. capitol."
+        ),
+        "target_title": "United States Capitol",
+    },
 
-    (
-        "S3",
-        "The United States Capitol document states that before Washington, "
-        "D.C. became the capital, the U.S. government met in Philadelphia."
-    ),
+    {
+        "name": "Hop 2",
+        "sentence": (
+            "Thus, Philadelphia is the city in question."
+        ),
+        "target_title": "Philadelphia",
+    },
 
-    (
-        "S4",
-        "Thus, Philadelphia is the city in question."
-    ),
+    {
+        "name": "Hop 3",
+        "sentence": (
+            "This establishes the religion in question as the AME."
+        ),
+        "target_title": "Philadelphia",
+    },
+
+    {
+        "name": "Hop 4",
+        "sentence": (
+            "The question then asks who started the Bethel branch of this "
+            "religion."
+        ),
+        "target_title": "Mother Bethel A.M.E. Church",
+    },
 ]
 
 
 # ============================================================
-# TARGET DOCUMENT
-# ============================================================
-
-TARGET_TITLE = "United States Capitol"
-
-
-# ============================================================
 # E5 MEAN POOLING
-# Same as R-Search / E5 model card
 # ============================================================
 
 def mean_pooling(
@@ -94,13 +98,13 @@ def mean_pooling(
 
 
 # ============================================================
-# LOAD FAISS + CORPUS FROM HF
+# LOAD FAISS + CORPUS
 # ============================================================
 
 def load_hf_artifact():
 
     print("=" * 80)
-    print("LOADING RETRIEVAL ARTIFACT FROM HUGGING FACE")
+    print("LOADING RETRIEVAL ARTIFACT")
     print("=" * 80)
 
     print(f"\nRepo: {REPO_ID}")
@@ -120,12 +124,12 @@ def load_hf_artifact():
 
     index = faiss.read_index(index_path)
 
-    print(f"Index vectors : {index.ntotal}")
+    print(f"Index vectors  : {index.ntotal}")
     print(f"Index dimension: {index.d}")
 
 
     # --------------------------------------------------------
-    # Corpus
+    # CORPUS
     # --------------------------------------------------------
 
     print("\nLoading corpus...")
@@ -152,7 +156,7 @@ def load_hf_artifact():
 
 
     # --------------------------------------------------------
-    # Alignment check
+    # ALIGNMENT
     # --------------------------------------------------------
 
     if len(corpus) != index.ntotal:
@@ -197,23 +201,18 @@ def load_e5():
 
 
 # ============================================================
-# ENCODE QUERY
+# ENCODE ONE SENTENCE
 # ============================================================
 
 @torch.no_grad()
-def encode_query(
-    query,
+def encode_sentence(
+    sentence,
     tokenizer,
     model,
 ):
 
-    # --------------------------------------------------------
     # E5 retrieval convention
-    #
-    # query: <text>
-    # --------------------------------------------------------
-
-    text = f"query: {query}"
+    text = f"query: {sentence}"
 
     inputs = tokenizer(
         [text],
@@ -238,10 +237,6 @@ def encode_query(
         inputs["attention_mask"],
     )
 
-    # --------------------------------------------------------
-    # L2 normalization
-    # --------------------------------------------------------
-
     embedding = F.normalize(
         embedding,
         p=2,
@@ -256,15 +251,15 @@ def encode_query(
 # ============================================================
 
 def search(
-    query,
+    sentence,
     index,
     corpus,
     tokenizer,
     model,
 ):
 
-    query_embedding = encode_query(
-        query,
+    query_embedding = encode_sentence(
+        sentence,
         tokenizer,
         model,
     )
@@ -308,6 +303,9 @@ def find_target(
     target_title,
 ):
 
+    if target_title is None:
+        return None
+
     for result in results:
 
         if result["title"] == target_title:
@@ -317,22 +315,25 @@ def find_target(
 
 
 # ============================================================
-# PRINT TEST
+# PRINT ONE TEST
 # ============================================================
 
 def print_test(
-    name,
-    sentence,
+    test_case,
     results,
+    target,
 ):
 
     print("\n")
     print("=" * 80)
-    print(name)
+    print(test_case["name"])
     print("=" * 80)
 
-    print("\nQUERY:")
-    print(sentence)
+    print("\nSENTENCE:")
+    print(test_case["sentence"])
+
+    print("\nEXPECTED TARGET:")
+    print(test_case["target_title"])
 
     print("\nTOP-3:")
 
@@ -359,6 +360,24 @@ def print_test(
         )
 
 
+    print("\nTARGET CHECK:")
+
+    if test_case["target_title"] is None:
+
+        print("No target specified.")
+
+    elif target is None:
+
+        print("TARGET FOUND: NO")
+
+    else:
+
+        print("TARGET FOUND: YES")
+        print(f"Rank : {target['rank']}")
+        print(f"Score: {target['score']:.6f}")
+        print(f"ID   : {target['id']}")
+
+
 # ============================================================
 # MAIN
 # ============================================================
@@ -380,49 +399,65 @@ def main():
 
 
     # --------------------------------------------------------
-    # Store results
+    # Run tests
     # --------------------------------------------------------
 
     all_results = []
 
+    print("\n")
+    print("=" * 80)
+    print("SINGLE-SENTENCE MULTI-HOP RETRIEVAL TEST")
+    print("=" * 80)
 
-    # ========================================================
-    # TEST S1..S4
-    #
-    # Each sentence is tested independently.
-    #
-    # IMPORTANT:
-    # NO QUESTION
-    # NO CUMULATION
-    # ========================================================
+    print(
+        "\nEach retrieval query consists of EXACTLY ONE sentence."
+    )
 
-    for sentence_name, sentence in SENTENCES:
+    print(
+        "\nNo question."
+        "\nNo previous sentence."
+        "\nNo cumulative context."
+    )
+
+
+    for test_case in TEST_CASES:
+
+        sentence = test_case["sentence"]
 
         results = search(
-            query=sentence,
+            sentence=sentence,
             index=index,
             corpus=corpus,
             tokenizer=tokenizer,
             model=model,
         )
 
-        print_test(
-            name=f"TEST — {sentence_name} ONLY",
-            sentence=sentence,
-            results=results,
-        )
-
         target = find_target(
             results,
-            TARGET_TITLE,
+            test_case["target_title"],
+        )
+
+        print_test(
+            test_case=test_case,
+            results=results,
+            target=target,
         )
 
         all_results.append(
             {
-                "name": sentence_name,
-                "sentence": sentence,
-                "results": results,
-                "target": target,
+                "name": test_case["name"],
+                "target": test_case["target_title"],
+                "found": target is not None,
+                "rank": (
+                    target["rank"]
+                    if target is not None
+                    else None
+                ),
+                "score": (
+                    target["score"]
+                    if target is not None
+                    else None
+                ),
             }
         )
 
@@ -433,64 +468,11 @@ def main():
 
     print("\n")
     print("=" * 80)
-    print("HOP-1 TARGET SUMMARY — SENTENCE ONLY")
+    print("SUMMARY")
     print("=" * 80)
 
     print(
-        f"\nTarget document: {TARGET_TITLE}"
-    )
-
-    print(
-        f"Top-K: {TOP_K}"
-    )
-
-
-    for item in all_results:
-
-        print("\n" + "-" * 80)
-
-        print(
-            f"Sentence state: {item['name']}"
-        )
-
-        target = item["target"]
-
-        if target is None:
-
-            print(
-                "TARGET FOUND: NO"
-            )
-
-        else:
-
-            print(
-                "TARGET FOUND: YES"
-            )
-
-            print(
-                f"Rank : {target['rank']}"
-            )
-
-            print(
-                f"Score: {target['score']:.6f}"
-            )
-
-            print(
-                f"ID   : {target['id']}"
-            )
-
-
-    # ========================================================
-    # RANK TRANSITION
-    # ========================================================
-
-    print("\n")
-    print("=" * 80)
-    print("TARGET RANK TRANSITION — SENTENCE ONLY")
-    print("=" * 80)
-
-    print(
-        "\nState                     Rank    Score"
+        "\nHop    Target                         Found   Rank   Score"
     )
 
     print(
@@ -499,21 +481,57 @@ def main():
 
     for item in all_results:
 
-        target = item["target"]
+        rank = (
+            str(item["rank"])
+            if item["rank"] is not None
+            else "-"
+        )
 
-        if target is None:
+        score = (
+            f"{item['score']:.6f}"
+            if item["score"] is not None
+            else "-"
+        )
 
-            print(
-                f"{item['name']:<25} NOT FOUND"
-            )
+        print(
+            f"{item['name']:<7}"
+            f"{item['target']:<31}"
+            f"{str(item['found']):<8}"
+            f"{rank:<7}"
+            f"{score}"
+        )
 
-        else:
 
-            print(
-                f"{item['name']:<25} "
-                f"{target['rank']:<7} "
-                f"{target['score']:.6f}"
-            )
+    # ========================================================
+    # RECALL
+    # ========================================================
+
+    valid_cases = [
+        x
+        for x in all_results
+        if x["target"] is not None
+    ]
+
+    if valid_cases:
+
+        found = sum(
+            x["found"]
+            for x in valid_cases
+        )
+
+        total = len(valid_cases)
+
+        print("\n" + "-" * 80)
+
+        print(
+            f"Target found @Top-{TOP_K}: "
+            f"{found}/{total}"
+        )
+
+        print(
+            f"Recall@{TOP_K}: "
+            f"{found / total:.4f}"
+        )
 
 
 # ============================================================
