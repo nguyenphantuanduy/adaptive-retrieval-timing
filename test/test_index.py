@@ -24,27 +24,17 @@ DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 
 # ============================================================
-# SAMPLE QUESTION
-# ============================================================
-
-QUESTION = (
-    "Who started the Bethel branch of the religion founded by the black "
-    "community in the city that used to be the US capitol?"
-)
-
-
-# ============================================================
 # COT SENTENCES
 #
-# Each sentence will be tested independently:
+# Each sentence is tested independently.
 #
-#   Q
-#   Q + S1
-#   Q + S2
-#   Q + S3
-#   Q + S4
+#   S1
+#   S2
+#   S3
+#   S4
 #
-# NOT cumulative.
+# NO QUESTION
+# NO CUMULATION
 # ============================================================
 
 SENTENCES = [
@@ -76,8 +66,6 @@ SENTENCES = [
 
 # ============================================================
 # TARGET DOCUMENT
-#
-# We are ONLY testing whether retrieval finds this document.
 # ============================================================
 
 TARGET_TITLE = "United States Capitol"
@@ -219,8 +207,12 @@ def encode_query(
     model,
 ):
 
-    # E5 retrieval convention:
+    # --------------------------------------------------------
+    # E5 retrieval convention
+    #
     # query: <text>
+    # --------------------------------------------------------
+
     text = f"query: {query}"
 
     inputs = tokenizer(
@@ -246,7 +238,10 @@ def encode_query(
         inputs["attention_mask"],
     )
 
+    # --------------------------------------------------------
     # L2 normalization
+    # --------------------------------------------------------
+
     embedding = F.normalize(
         embedding,
         p=2,
@@ -305,7 +300,7 @@ def search(
 
 
 # ============================================================
-# CHECK TARGET
+# FIND TARGET
 # ============================================================
 
 def find_target(
@@ -327,7 +322,7 @@ def find_target(
 
 def print_test(
     name,
-    query,
+    sentence,
     results,
 ):
 
@@ -337,7 +332,7 @@ def print_test(
     print("=" * 80)
 
     print("\nQUERY:")
-    print(query)
+    print(sentence)
 
     print("\nTOP-3:")
 
@@ -385,67 +380,26 @@ def main():
 
 
     # --------------------------------------------------------
-    # Store all results
+    # Store results
     # --------------------------------------------------------
 
     all_results = []
 
 
     # ========================================================
-    # TEST 0
-    # QUESTION ONLY
-    # ========================================================
-
-    query = QUESTION
-
-    results = search(
-        query=query,
-        index=index,
-        corpus=corpus,
-        tokenizer=tokenizer,
-        model=model,
-    )
-
-    print_test(
-        name="TEST 0 — QUESTION ONLY",
-        query=query,
-        results=results,
-    )
-
-    target = find_target(
-        results,
-        TARGET_TITLE,
-    )
-
-    all_results.append(
-        {
-            "name": "Q",
-            "sentence": None,
-            "results": results,
-            "target": target,
-        }
-    )
-
-
-    # ========================================================
-    # TEST 1..N
+    # TEST S1..S4
     #
-    # Each sentence is independently appended to Q.
+    # Each sentence is tested independently.
     #
-    # Q + S1
-    # Q + S2
-    # Q + S3
-    # Q + S4
-    #
-    # NOT cumulative.
+    # IMPORTANT:
+    # NO QUESTION
+    # NO CUMULATION
     # ========================================================
 
     for sentence_name, sentence in SENTENCES:
 
-        query = QUESTION + " " + sentence
-
         results = search(
-            query=query,
+            query=sentence,
             index=index,
             corpus=corpus,
             tokenizer=tokenizer,
@@ -453,10 +407,8 @@ def main():
         )
 
         print_test(
-            name=(
-                f"TEST — QUESTION + {sentence_name}"
-            ),
-            query=query,
+            name=f"TEST — {sentence_name} ONLY",
+            sentence=sentence,
             results=results,
         )
 
@@ -467,7 +419,7 @@ def main():
 
         all_results.append(
             {
-                "name": f"Q + {sentence_name}",
+                "name": sentence_name,
                 "sentence": sentence,
                 "results": results,
                 "target": target,
@@ -481,7 +433,7 @@ def main():
 
     print("\n")
     print("=" * 80)
-    print("HOP-1 TARGET SUMMARY")
+    print("HOP-1 TARGET SUMMARY — SENTENCE ONLY")
     print("=" * 80)
 
     print(
@@ -498,7 +450,7 @@ def main():
         print("\n" + "-" * 80)
 
         print(
-            f"Query state: {item['name']}"
+            f"Sentence state: {item['name']}"
         )
 
         target = item["target"]
@@ -534,11 +486,11 @@ def main():
 
     print("\n")
     print("=" * 80)
-    print("TARGET RANK TRANSITION")
+    print("TARGET RANK TRANSITION — SENTENCE ONLY")
     print("=" * 80)
 
     print(
-        "\nState                      Rank    Score"
+        "\nState                     Rank    Score"
     )
 
     print(
