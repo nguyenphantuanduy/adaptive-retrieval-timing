@@ -3,3 +3,5 @@ transformers
 datasets
 gdown
 accelerate
+sentencesplit
+spacy

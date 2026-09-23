@@ -1,3 +1,0 @@
-github: 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
-hf:
-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

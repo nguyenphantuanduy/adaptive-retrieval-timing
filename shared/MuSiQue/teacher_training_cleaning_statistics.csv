@@ -1,0 +1,5 @@
+mode,config,split,total_samples,missing_teacher_output,empty_teacher_output,missing_final_answer,answer_matches,answer_mismatches,answer_match_rate_percent,question_prefixes_found,question_prefixes_cleaned,question_prefixes_remaining,valid_samples,removed_samples
+clean-and-upload,2-hop,train,14376,0,0,8,14361,7,99.95,7457,7449,0,14361,15
+clean-and-upload,3-hop,train,4387,0,0,3,4383,1,99.98,2108,2105,0,4383,4
+clean-and-upload,4-hop,train,1175,0,0,0,1175,0,100.00,528,528,0,1175,0
+clean-and-upload,TOTAL,ALL,19938,0,0,11,19919,8,99.96,10093,10082,0,19919,19
