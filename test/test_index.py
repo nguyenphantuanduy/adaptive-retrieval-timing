@@ -1,7 +1,7 @@
-```python
 import json
-import torch
+
 import faiss
+import torch
 import torch.nn.functional as F
 
 from huggingface_hub import hf_hub_download
@@ -32,27 +32,32 @@ QUESTION = (
     "community in the city that used to be the US capitol?"
 )
 
-COT_SENTENCE = (
-    "The question asks about the founder of the Bethel branch of a religion "
-    "founded by the black community in the city that used to be the U.S. capitol."
-)
-
-QUESTION_ONLY = QUESTION
-
-QUESTION_PLUS_ONE_SENTENCE = (
-    QUESTION + " " + COT_SENTENCE
+# This is the sentence that leads to the next hop.
+NEXT_HOP_SENTENCE = (
+    "The United States Capitol document states that before Washington, D.C. "
+    "became the capital, the U.S. government met in Philadelphia."
 )
 
 
 # ============================================================
-# E5 POOLING
+# E5 MEAN POOLING
 # Same as R-Search
 # ============================================================
 
 def mean_pooling(last_hidden_state, attention_mask):
+    """
+    Mean pooling with padding tokens excluded.
+
+    Same logic as R-Search:
+        hidden.sum(dim=1) / attention_mask.sum(dim=1)
+    """
+
     mask = attention_mask[..., None].bool()
 
-    masked_hidden = last_hidden_state.masked_fill(~mask, 0.0)
+    masked_hidden = last_hidden_state.masked_fill(
+        ~mask,
+        0.0,
+    )
 
     return masked_hidden.sum(dim=1) / attention_mask.sum(
         dim=1
@@ -60,12 +65,13 @@ def mean_pooling(last_hidden_state, attention_mask):
 
 
 # ============================================================
-# LOAD HF ARTIFACT
+# LOAD FAISS INDEX + CORPUS FROM HUGGING FACE
 # ============================================================
 
 def load_hf_artifact():
+
     print("=" * 80)
-    print("DOWNLOADING / LOADING RETRIEVAL ARTIFACT FROM HUGGING FACE")
+    print("LOADING RETRIEVAL ARTIFACT FROM HUGGING FACE")
     print("=" * 80)
 
     print(f"\nRepo: {REPO_ID}")
@@ -74,23 +80,27 @@ def load_hf_artifact():
     # FAISS index
     # --------------------------------------------------------
 
+    print("\nDownloading / loading FAISS index...")
+
     index_path = hf_hub_download(
         repo_id=REPO_ID,
         filename="e5_Flat.index",
         repo_type=REPO_TYPE,
     )
 
-    print(f"\nFAISS index:")
-    print(f"  {index_path}")
+    print(f"Index path: {index_path}")
 
     index = faiss.read_index(index_path)
 
-    print(f"  ntotal : {index.ntotal}")
-    print(f"  dim    : {index.d}")
+    print(f"Index vectors : {index.ntotal}")
+    print(f"Index dimension: {index.d}")
+
 
     # --------------------------------------------------------
     # Corpus
     # --------------------------------------------------------
+
+    print("\nDownloading / loading corpus...")
 
     corpus_path = hf_hub_download(
         repo_id=REPO_ID,
@@ -98,29 +108,35 @@ def load_hf_artifact():
         repo_type=REPO_TYPE,
     )
 
-    print(f"\nCorpus:")
-    print(f"  {corpus_path}")
+    print(f"Corpus path: {corpus_path}")
 
     corpus = []
 
-    with open(corpus_path, "r", encoding="utf-8") as f:
+    with open(
+        corpus_path,
+        "r",
+        encoding="utf-8",
+    ) as f:
+
         for line in f:
             corpus.append(json.loads(line))
 
-    print(f"  passages: {len(corpus)}")
+    print(f"Corpus passages: {len(corpus)}")
+
 
     # --------------------------------------------------------
     # Verify alignment
     # --------------------------------------------------------
 
     if len(corpus) != index.ntotal:
+
         raise RuntimeError(
-            f"Corpus/index mismatch!\n"
-            f"  corpus = {len(corpus)}\n"
-            f"  index  = {index.ntotal}"
+            "\nCorpus / FAISS index mismatch!\n"
+            f"Corpus passages : {len(corpus)}\n"
+            f"FAISS vectors   : {index.ntotal}"
         )
 
-    print("\nCorpus/index alignment: OK")
+    print("\nCorpus / FAISS alignment: OK")
 
     return index, corpus
 
@@ -130,11 +146,12 @@ def load_hf_artifact():
 # ============================================================
 
 def load_e5():
+
     print("\n" + "=" * 80)
     print("LOADING E5")
     print("=" * 80)
 
-    print(f"\nModel: {MODEL_NAME}")
+    print(f"\nModel : {MODEL_NAME}")
     print(f"Device: {DEVICE}")
 
     tokenizer = AutoTokenizer.from_pretrained(
@@ -157,8 +174,19 @@ def load_e5():
 # ============================================================
 
 @torch.no_grad()
-def encode_query(query, tokenizer, model):
-    # E5 query prefix
+def encode_query(
+    query,
+    tokenizer,
+    model,
+):
+    """
+    Encode one query using the same E5 procedure
+    used for retrieval-index construction.
+
+    Query format:
+        query: <query>
+    """
+
     text = f"query: {query}"
 
     inputs = tokenizer(
@@ -185,7 +213,7 @@ def encode_query(query, tokenizer, model):
     )
 
     # Same as R-Search:
-    # F.normalize(..., p=2, dim=1)
+    # F.normalize(embeddings, p=2, dim=1)
     embedding = F.normalize(
         embedding,
         p=2,
@@ -207,10 +235,11 @@ def search(
     model,
     top_k=TOP_K,
 ):
+
     query_embedding = encode_query(
-        query,
-        tokenizer,
-        model,
+        query=query,
+        tokenizer=tokenizer,
+        model=model,
     )
 
     scores, indices = index.search(
@@ -224,13 +253,16 @@ def search(
         zip(scores[0], indices[0]),
         start=1,
     ):
-        doc = corpus[int(idx)]
+
+        idx = int(idx)
+
+        doc = corpus[idx]
 
         results.append(
             {
                 "rank": rank,
                 "score": float(score),
-                "index": int(idx),
+                "index": idx,
                 "id": doc["id"],
                 "title": doc["title"],
                 "content": doc["content"],
@@ -244,18 +276,24 @@ def search(
 # PRINT RESULTS
 # ============================================================
 
-def print_results(query_name, query, results):
+def print_results(
+    test_name,
+    query,
+    results,
+):
+
     print("\n")
     print("=" * 80)
-    print(query_name)
+    print(test_name)
     print("=" * 80)
 
     print("\nQUERY:")
     print(query)
 
-    print("\nRETRIEVED PASSAGES:")
+    print("\nTOP RESULTS:")
 
     for result in results:
+
         print("\n" + "-" * 80)
 
         print(f"Rank  : {result['rank']}")
@@ -269,15 +307,97 @@ def print_results(query_name, query, results):
 
 
 # ============================================================
+# PRINT COMPARISON
+# ============================================================
+
+def print_comparison(
+    results_question,
+    results_question_plus_sentence,
+):
+
+    print("\n")
+    print("=" * 80)
+    print("RETRIEVAL COMPARISON")
+    print("=" * 80)
+
+    print("\nQuestion only:")
+
+    for result in results_question:
+
+        print(
+            f"  Rank {result['rank']} | "
+            f"ID={result['id']} | "
+            f"Score={result['score']:.6f} | "
+            f"Title={result['title']}"
+        )
+
+
+    print("\nQuestion + 1 sentence:")
+
+    for result in results_question_plus_sentence:
+
+        print(
+            f"  Rank {result['rank']} | "
+            f"ID={result['id']} | "
+            f"Score={result['score']:.6f} | "
+            f"Title={result['title']}"
+        )
+
+
+    # --------------------------------------------------------
+    # Compare top-k IDs
+    # --------------------------------------------------------
+
+    ids_question = [
+        result["id"]
+        for result in results_question
+    ]
+
+    ids_question_plus_sentence = [
+        result["id"]
+        for result in results_question_plus_sentence
+    ]
+
+    shared_ids = (
+        set(ids_question)
+        & set(ids_question_plus_sentence)
+    )
+
+    print("\nTop-k ID comparison:")
+
+    print(
+        f"  Question only          : "
+        f"{ids_question}"
+    )
+
+    print(
+        f"  Question + 1 sentence  : "
+        f"{ids_question_plus_sentence}"
+    )
+
+    print(
+        f"  Shared documents       : "
+        f"{sorted(shared_ids)}"
+    )
+
+    print(
+        f"  Number shared          : "
+        f"{len(shared_ids)}/{TOP_K}"
+    )
+
+
+# ============================================================
 # MAIN
 # ============================================================
 
 def main():
+
     # --------------------------------------------------------
     # Load shared retrieval artifact
     # --------------------------------------------------------
 
     index, corpus = load_hf_artifact()
+
 
     # --------------------------------------------------------
     # Load E5
@@ -285,13 +405,14 @@ def main():
 
     tokenizer, model = load_e5()
 
-    # --------------------------------------------------------
-    # Test 1:
-    # Question only
-    # --------------------------------------------------------
 
-    results_question_only = search(
-        query=QUESTION_ONLY,
+    # ========================================================
+    # TEST 1
+    # Question only
+    # ========================================================
+
+    results_question = search(
+        query=QUESTION,
         index=index,
         corpus=corpus,
         tokenizer=tokenizer,
@@ -300,18 +421,25 @@ def main():
     )
 
     print_results(
-        "TEST 1 — QUESTION ONLY",
-        QUESTION_ONLY,
-        results_question_only,
+        test_name="TEST 1 — QUESTION ONLY",
+        query=QUESTION,
+        results=results_question,
     )
 
-    # --------------------------------------------------------
-    # Test 2:
-    # Question + 1 CoT sentence
-    # --------------------------------------------------------
+
+    # ========================================================
+    # TEST 2
+    # Question + 1 sentence leading to next hop
+    # ========================================================
+
+    question_plus_sentence = (
+        QUESTION
+        + " "
+        + NEXT_HOP_SENTENCE
+    )
 
     results_question_plus_sentence = search(
-        query=QUESTION_PLUS_ONE_SENTENCE,
+        query=question_plus_sentence,
         index=index,
         corpus=corpus,
         tokenizer=tokenizer,
@@ -320,58 +448,27 @@ def main():
     )
 
     print_results(
-        "TEST 2 — QUESTION + 1 COT SENTENCE",
-        QUESTION_PLUS_ONE_SENTENCE,
-        results_question_plus_sentence,
+        test_name="TEST 2 — QUESTION + 1 NEXT-HOP SENTENCE",
+        query=question_plus_sentence,
+        results=results_question_plus_sentence,
     )
 
-    # --------------------------------------------------------
-    # Compare rankings
-    # --------------------------------------------------------
 
-    print("\n")
-    print("=" * 80)
-    print("RANKING COMPARISON")
-    print("=" * 80)
+    # ========================================================
+    # COMPARISON
+    # ========================================================
 
-    print("\nQuestion only:")
+    print_comparison(
+        results_question=results_question,
+        results_question_plus_sentence=(
+            results_question_plus_sentence
+        ),
+    )
 
-    for r in results_question_only:
-        print(
-            f"  Rank {r['rank']}: "
-            f"ID={r['id']} | "
-            f"score={r['score']:.6f} | "
-            f"title={r['title']}"
-        )
 
-    print("\nQuestion + 1 sentence:")
-
-    for r in results_question_plus_sentence:
-        print(
-            f"  Rank {r['rank']}: "
-            f"ID={r['id']} | "
-            f"score={r['score']:.6f} | "
-            f"title={r['title']}"
-        )
-
-    # --------------------------------------------------------
-    # Shared documents
-    # --------------------------------------------------------
-
-    ids_question_only = {
-        r["id"] for r in results_question_only
-    }
-
-    ids_question_plus_sentence = {
-        r["id"] for r in results_question_plus_sentence
-    }
-
-    shared = ids_question_only & ids_question_plus_sentence
-
-    print("\nShared top-k document IDs:")
-    print(f"  {sorted(shared)}")
-
+# ============================================================
+# ENTRY POINT
+# ============================================================
 
 if __name__ == "__main__":
     main()
-```
