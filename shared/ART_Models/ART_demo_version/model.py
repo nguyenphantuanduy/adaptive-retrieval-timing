@@ -44,7 +44,8 @@ from .utils import (
     update_attention_mask,
 )
 
-THRESHOLD = 0.5
+THRESHOLD = 0.4297
+RETRIEVAL_COST = 0.095349
 
 class AttentionMixingProbePreTrainedModel(Qwen2PreTrainedModel):
     _no_split_modules = [
@@ -460,6 +461,7 @@ class AttentionMixingProbeForCausalLM(
         # =====================================================================
 
         self.retrieval_count = 0
+        retrieval_scores = []
 
         # =====================================================================
         # 2. Initial sequence length
@@ -584,6 +586,10 @@ class AttentionMixingProbeForCausalLM(
             )
 
             decision_score = question_decision_score
+
+            retrieval_scores.append(
+                question_decision_score
+            )
             # -----------------------------------------------------------------
             # 7.4 Extend normal attention mask
             # -----------------------------------------------------------------
@@ -761,6 +767,10 @@ class AttentionMixingProbeForCausalLM(
                 new_decision_score.item() >= THRESHOLD
                 and self.retrieval_count < self.max_retrievals
             ):
+
+                retrieval_scores.append(
+                    new_decision_score
+                )
 
                 # -------------------------------------------------------------
                 # 8.8.1 Build retrieval query from CURRENT completed sentence
@@ -1008,11 +1018,29 @@ class AttentionMixingProbeForCausalLM(
 
         if labels is not None:
 
-            loss = self.loss_function(
+            lm_loss = self.loss_function(
                 logits=logits,
                 labels=labels,
                 vocab_size=self.config.vocab_size,
                 **kwargs,
+            )
+
+            if retrieval_scores:
+
+                retrieval_score_sum = torch.stack(
+                    retrieval_scores
+                ).sum()
+
+            else:
+                retrieval_score_sum = lm_loss.new_zeros(())
+
+            retrieval_cost_loss = (
+                RETRIEVAL_COST * retrieval_score_sum
+            )   
+
+            loss = (
+                lm_loss
+                + retrieval_cost_loss
             )
 
         # =====================================================================
