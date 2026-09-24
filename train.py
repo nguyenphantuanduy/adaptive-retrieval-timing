@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import gc
+import math
 import random
 from typing import Dict, Any, List
 
@@ -34,11 +36,29 @@ OUTPUT_DIR = "./art-training-output"
 
 SEED = 42
 
-NUM_TRAIN_EPOCHS = 0.5
+# ------------------------------------------------------------
+# Training epochs
+# ------------------------------------------------------------
+
+NUM_TRAIN_EPOCHS = 0.1
+
+# ------------------------------------------------------------
+# Percentage of decoder layers to unfreeze
+# ------------------------------------------------------------
+
+UNFREEZE_LAST_LAYER_PERCENTAGE = 0.40
+
+# ------------------------------------------------------------
+# Batch
+# ------------------------------------------------------------
 
 PER_DEVICE_TRAIN_BATCH_SIZE = 1
 
 GRADIENT_ACCUMULATION_STEPS = 32
+
+# ------------------------------------------------------------
+# Optimization
+# ------------------------------------------------------------
 
 LEARNING_RATE = 1e-5
 
@@ -46,13 +66,28 @@ WEIGHT_DECAY = 0.0
 
 MAX_GRAD_NORM = 1.0
 
+# ------------------------------------------------------------
+# Logging
+# ------------------------------------------------------------
+
 LOGGING_STEPS = 1
+
+# ------------------------------------------------------------
+# Saving
+# ------------------------------------------------------------
 
 SAVE_STEPS = 500
 
+# ------------------------------------------------------------
+# Precision
+# ------------------------------------------------------------
+
 BF16 = True
 
+# ------------------------------------------------------------
 # ART training currently relies on KV cache.
+# ------------------------------------------------------------
+
 GRADIENT_CHECKPOINTING = False
 
 
@@ -236,13 +271,6 @@ def tokenize_training_sample(
         },
     ]
 
-    # --------------------------------------------------------
-    # IMPORTANT:
-    #
-    # First create the normal chat-template string.
-    # Do NOT tokenize inside apply_chat_template().
-    # --------------------------------------------------------
-
     question_text = tokenizer.apply_chat_template(
         messages,
         tokenize=False,
@@ -286,24 +314,6 @@ def tokenize_training_sample(
     # 4. ATTENTION MASK
     # ========================================================
 
-    # --------------------------------------------------------
-    # Question:
-    #
-    # [1, 1, 1, ..., 1]
-    #
-    # Answer:
-    #
-    # [1, 1, 1, ..., 1]
-    #
-    # Final:
-    #
-    # [question mask] + [answer mask]
-    #
-    # This therefore covers the complete initial sequence:
-    #
-    # question + answer
-    # --------------------------------------------------------
-
     question_attention_mask = [
         1
         for _ in question_input_ids
@@ -323,12 +333,6 @@ def tokenize_training_sample(
     # 5. LABELS
     # ========================================================
 
-    # --------------------------------------------------------
-    # Question tokens do not contribute to LM loss.
-    #
-    # Answer tokens do contribute.
-    # --------------------------------------------------------
-
     labels = (
         [-100] * len(question_input_ids)
         + answer_input_ids
@@ -346,7 +350,11 @@ def tokenize_training_sample(
             f"labels={len(labels)}"
         )
 
-    if len(question_input_ids) + len(answer_input_ids) != len(labels):
+    if (
+        len(question_input_ids)
+        + len(answer_input_ids)
+        != len(labels)
+    ):
 
         raise ValueError(
             "Question + answer length does not match labels."
@@ -357,15 +365,12 @@ def tokenize_training_sample(
     # ========================================================
 
     return {
-        # Original question is needed by ART retrieval.
         "question": question,
 
         "question_input_ids": question_input_ids,
 
         "answer_input_ids": answer_input_ids,
 
-        # IMPORTANT:
-        # Full question + answer attention mask.
         "attention_mask": attention_mask,
 
         "labels": labels,
@@ -647,10 +652,17 @@ def verify_decision_head(model) -> None:
 
 def freeze_backbone(model) -> None:
     """
-    Train only:
+    Freeze the entire model first, then unfreeze:
 
-        - last decoder layer
+        - the last 40% of decoder layers
         - retrieval decision head
+
+    Example:
+        36 decoder layers
+        40% = 14.4
+        ceil(14.4) = 15
+
+    Therefore layers 21-35 are trainable.
 
     Everything else is frozen.
 
@@ -660,50 +672,110 @@ def freeze_backbone(model) -> None:
 
     print()
     print("=" * 80)
-    print("FREEZING BACKBONE")
+    print("FREEZING / UNFREEZING BACKBONE")
     print("=" * 80)
 
     # --------------------------------------------------------
-    # Freeze everything first.
+    # 1. Freeze everything first.
     # --------------------------------------------------------
 
     for parameter in model.parameters():
         parameter.requires_grad = False
 
     # --------------------------------------------------------
-    # Last decoder layer.
+    # 2. Get decoder layers.
     # --------------------------------------------------------
 
-    last_layer = model.model.layers[-1]
+    layers = model.model.layers
 
-    for parameter in last_layer.parameters():
-        parameter.requires_grad = True
+    num_layers = len(layers)
 
     # --------------------------------------------------------
-    # Retrieval decision head.
+    # 3. Calculate number of layers to unfreeze.
+    #
+    # Use ceil so the number is never below the requested
+    # percentage.
+    # --------------------------------------------------------
+
+    num_layers_to_unfreeze = math.ceil(
+        num_layers
+        * UNFREEZE_LAST_LAYER_PERCENTAGE
+    )
+
+    first_trainable_layer = (
+        num_layers
+        - num_layers_to_unfreeze
+    )
+
+    # --------------------------------------------------------
+    # 4. Unfreeze last N decoder layers.
+    # --------------------------------------------------------
+
+    for layer_index in range(
+        first_trainable_layer,
+        num_layers,
+    ):
+
+        for parameter in layers[layer_index].parameters():
+            parameter.requires_grad = True
+
+    # --------------------------------------------------------
+    # 5. Unfreeze retrieval decision head.
     # --------------------------------------------------------
 
     for parameter in (
         model.retrieval_decision_head.parameters()
     ):
+
         parameter.requires_grad = True
 
     # --------------------------------------------------------
-    # Report.
+    # 6. Report configuration.
     # --------------------------------------------------------
 
-    num_layers = len(model.model.layers)
+    actual_percentage = (
+        100.0
+        * num_layers_to_unfreeze
+        / num_layers
+    )
 
     print(
-        f"Total decoder layers : "
+        f"Total decoder layers       : "
         f"{num_layers}"
+    )
+
+    print(
+        f"Requested unfreeze         : "
+        f"{UNFREEZE_LAST_LAYER_PERCENTAGE * 100:.1f}%"
+    )
+
+    print(
+        f"Number of trainable layers : "
+        f"{num_layers_to_unfreeze}"
+    )
+
+    print(
+        f"Actual unfreeze percentage : "
+        f"{actual_percentage:.2f}%"
+    )
+
+    print(
+        f"First trainable layer      : "
+        f"{first_trainable_layer}"
+    )
+
+    print(
+        f"Last trainable layer       : "
+        f"{num_layers - 1}"
     )
 
     print()
 
-    for index, layer in enumerate(
-        model.model.layers
-    ):
+    # --------------------------------------------------------
+    # 7. Print every decoder layer.
+    # --------------------------------------------------------
+
+    for index, layer in enumerate(layers):
 
         trainable = any(
             parameter.requires_grad
@@ -1129,11 +1201,11 @@ def main():
     print("=" * 80)
 
     # ========================================================
-    # 12. FREEZE BACKBONE
+    # 12. FREEZE / UNFREEZE
     # ========================================================
 
     print()
-    print("10. Freezing backbone...")
+    print("10. Configuring trainable layers...")
 
     freeze_backbone(model)
 
@@ -1305,6 +1377,11 @@ def main():
     )
 
     print(
+        f"Unfreeze last: "
+        f"{UNFREEZE_LAST_LAYER_PERCENTAGE * 100:.1f}% layers"
+    )
+
+    print(
         f"Gradient checkpointing: "
         f"{GRADIENT_CHECKPOINTING}"
     )
@@ -1452,6 +1529,29 @@ def main():
         f"retrieval_count : "
         f"{model.retrieval_count}"
     )
+
+    if hasattr(
+        model,
+        "retrieval_count_for_logging",
+    ):
+
+        retrieval_counts = getattr(
+            model,
+            "retrieval_count_for_logging",
+            [],
+        )
+
+        print(
+            f"retrieval_count_for_logging: "
+            f"{len(retrieval_counts)} entries"
+        )
+
+        if retrieval_counts:
+
+            print(
+                f"Average retrieval count: "
+                f"{sum(retrieval_counts) / len(retrieval_counts):.6f}"
+            )
 
     if hasattr(
         model,

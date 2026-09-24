@@ -317,6 +317,7 @@ class AttentionMixingProbeForCausalLM(
 
         self.max_retrievals = 4
         self.retrieval_count = 0
+        self.retrieval_count_for_logging = []
 
         self.retriever = None
         self.tokenizer = None
@@ -1063,6 +1064,10 @@ class AttentionMixingProbeForCausalLM(
         # 12. Return
         # =====================================================================
 
+        self.retrieval_count_for_logging.append(
+            self.retrieval_count
+        )
+        
         return CausalLMOutputWithPast(
             loss=loss,
             logits=logits,

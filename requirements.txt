@@ -9,3 +9,4 @@ faiss-cpu
 huggingface_hub
 numpy
 tqdm
+safetensors
