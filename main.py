@@ -48,9 +48,7 @@ def main() -> None:
 
     if device.type == "cuda":
         print(f"GPU: {torch.cuda.get_device_name(0)}")
-        print(
-            f"CUDA: {torch.version.cuda}"
-        )
+        print(f"CUDA: {torch.version.cuda}")
 
     # =========================================================================
     # 2. Load tokenizer
@@ -83,9 +81,8 @@ def main() -> None:
     # Use Qwen's official chat template.
     #
     # The question appears in the user message.
-    # The same question is also passed separately to ART later as
-    # `question=QUESTION` so that the retrieval module knows the
-    # original question.
+    # The same question is passed separately to ART later as
+    # `question=QUESTION` for retrieval.
     inputs = tokenizer.apply_chat_template(
         messages,
         tokenize=True,
@@ -93,8 +90,6 @@ def main() -> None:
         return_tensors="pt",
     )
 
-    # Depending on the Transformers version, apply_chat_template()
-    # can return either a Tensor or a BatchEncoding-like object.
     if isinstance(inputs, torch.Tensor):
 
         input_ids = inputs
@@ -138,23 +133,9 @@ def main() -> None:
 
     print("\n3. Loading ART demo model...")
 
-    print(
-        "   NOTE: low_cpu_mem_usage=False is used because "
-        "ART initializes the MuSiQue/E5 retriever inside __init__()."
-    )
-
     model = AutoModelForCausalLM.from_pretrained(
         MODEL_REPO,
         trust_remote_code=True,
-
-        # IMPORTANT:
-        # Prevent Transformers from creating the ART model on meta device.
-        #
-        # This is necessary because the current ART model constructor
-        # initializes MuSiQueRetrievalDB(), which itself calls
-        # AutoModel.from_pretrained() for E5.
-        low_cpu_mem_usage=False,
-
         dtype=DTYPE,
         attn_implementation="eager",
     )
@@ -176,21 +157,87 @@ def main() -> None:
     )
 
     # =========================================================================
-    # 6. Generation
+    # 6. Initialize ART decision head
+    # =========================================================================
+    #
+    # The decision head is newly added to the original Qwen model, so its
+    # parameters are not pretrained.
+    #
+    # For this DEMO ONLY:
+    #
+    #     weight = 0
+    #     bias   = 0
+    #
+    # Therefore:
+    #
+    #     logit    = 0
+    #     sigmoid  = 0.5
+    #
+    # With THRESHOLD = 0.5 and condition score >= threshold,
+    # retrieval will be triggered.
+    #
+    # This is NOT the final ART initialization/training strategy.
+    # It is only used to verify that the retrieval pipeline works.
+    #
     # =========================================================================
 
-    print("\n4. Generating...")
+    print("\n4. Initializing ART decision head for retrieval test...")
+
+    with torch.no_grad():
+
+        model.retrieval_decision_head.projection.weight.zero_()
+        model.retrieval_decision_head.projection.bias.zero_()
+
+    print(
+        "   Decision head weight: ZERO"
+    )
+
+    print(
+        "   Decision head bias:   ZERO"
+    )
+
+    # Verify the initial decision score.
+    #
+    # Use a dummy hidden state with the same hidden dimension as Qwen.
+    hidden_size = model.config.hidden_size
+
+    dummy_hidden_state = torch.zeros(
+        1,
+        1,
+        hidden_size,
+        device=device,
+        dtype=DTYPE,
+    )
+
+    with torch.inference_mode():
+
+        initial_decision_score = (
+            model.retrieval_decision_head(
+                dummy_hidden_state
+            )
+        )
+
+    print(
+        f"   Initial decision score: "
+        f"{initial_decision_score.detach().float().cpu().tolist()}"
+    )
+
+    # =========================================================================
+    # 7. Generation
+    # =========================================================================
+
+    print("\n5. Generating...")
 
     print(
         f"   Question: {QUESTION}"
     )
 
     print(
-        f"   Max new tokens: 256"
+        "   Max new tokens: 512"
     )
 
     print(
-        f"   Sampling: disabled (greedy decoding)"
+        "   Sampling: disabled (greedy decoding)"
     )
 
     print()
@@ -205,7 +252,7 @@ def main() -> None:
             # ART-specific input
             # -----------------------------------------------------------------
             #
-            # The question is already included in the user message above.
+            # The question is already included in the user prompt.
             #
             # This separate argument is NOT added to the prompt.
             # It is passed to ART so the retrieval module knows the
@@ -228,7 +275,7 @@ def main() -> None:
         )
 
     # =========================================================================
-    # 7. Decode generated answer only
+    # 8. Decode generated answer only
     # =========================================================================
 
     prompt_length = input_ids.shape[1]
@@ -244,7 +291,7 @@ def main() -> None:
     )
 
     # =========================================================================
-    # 8. Print result
+    # 9. Print result
     # =========================================================================
 
     print("=" * 80)
@@ -264,23 +311,26 @@ def main() -> None:
     )
 
     # =========================================================================
-    # 9. ART state
+    # 10. ART state
     # =========================================================================
 
     print("\nART STATE")
     print("-" * 80)
 
     if hasattr(model, "retrieval_count"):
+
         print(
             f"Retrieval count: {model.retrieval_count}"
         )
 
     if hasattr(model, "max_retrievals"):
+
         print(
             f"Max retrievals: {model.max_retrievals}"
         )
 
     if hasattr(model, "isTraining"):
+
         print(
             f"isTraining: {model.isTraining}"
         )
