@@ -46,6 +46,7 @@ from .utils import (
 
 THRESHOLD = 0.4297
 RETRIEVAL_COST = 0.095349
+MAX_PASSAGE_TOKENS = 1152
 
 class AttentionMixingProbePreTrainedModel(Qwen2PreTrainedModel):
     _no_split_modules = [
@@ -577,7 +578,7 @@ class AttentionMixingProbeForCausalLM(
                 retrieval_text,
                 return_tensors="pt",
                 truncation=True,
-                max_length=512,
+                max_length=MAX_PASSAGE_TOKENS,
             )
 
             document_input_ids = (
@@ -816,7 +817,7 @@ class AttentionMixingProbeForCausalLM(
                         retrieval_text,
                         return_tensors="pt",
                         truncation=True,
-                        max_length=512,
+                        max_length=MAX_PASSAGE_TOKENS,
                     )
                 )
 
@@ -1266,7 +1267,7 @@ class AttentionMixingProbeForCausalLM(
                     retrieval_text,
                     return_tensors="pt",
                     truncation=True,
-                    max_length=512,
+                    max_length=MAX_PASSAGE_TOKENS,
                 )
 
                 document_input_ids = (
