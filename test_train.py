@@ -914,7 +914,7 @@ def main():
         # No custom checkpoint code is added to the model forward.
         # ---------------------------------------------------------------------
 
-        gradient_checkpointing=True,
+        gradient_checkpointing=False,
 
         # ---------------------------------------------------------------------
         # Custom ART forward arguments
