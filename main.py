@@ -1,501 +1,251 @@
-from pathlib import Path
+from __future__ import annotations
 
-import numpy as np
-import pandas as pd
-import matplotlib.pyplot as plt
-
-
-# ============================================================
-# CONFIG
-# ============================================================
-
-DATA_DIR = Path(".")
-
-INPUT_FILE = DATA_DIR / "gradient_2_hop.csv"
-
-OUTPUT_DIR = DATA_DIR / "plots"
-OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+import torch
+from transformers import AutoTokenizer, AutoModelForCausalLM
 
 
-# ============================================================
-# GET GRADIENT COLUMNS
-# ============================================================
+# =============================================================================
+# Configuration
+# =============================================================================
 
-def get_gradient_columns(df):
-    """
-    Expected gradient column format:
+MODEL_REPO = "adaptive-retrieval-timing/ART-Demo-Qwen2.5-3B"
+TOKENIZER_REPO = "Qwen/Qwen2.5-3B-Instruct"
 
-        3:0/0.0000
-        3:0/0.0312
-        3:0/0.0625
-        ...
-        2:1/0.0000
-        ...
+DTYPE = torch.bfloat16
 
-    Returns:
+QUESTION = (
+    "Who started the Bethel branch of the religion "
+    "the black community founded in the former US capital?"
+)
 
+SYSTEM_PROMPT = """You are a helpful assistant that can solve the given question step by step.
+For each step, start by explaining your thought process.
+If additional information is needed, the system will perform retrieval and return the top search results within <observation> and </observation>. Continue your reasoning using the retrieved information.
+When you know the final answer, provide the final answer within <answer> and </answer> tags."""
+
+
+# =============================================================================
+# Main
+# =============================================================================
+
+def main() -> None:
+
+    print("=" * 80)
+    print("ART DEMO GENERATION TEST")
+    print("=" * 80)
+
+    # =========================================================================
+    # 1. Device
+    # =========================================================================
+
+    device = (
+        torch.device("cuda")
+        if torch.cuda.is_available()
+        else torch.device("cpu")
+    )
+
+    print(f"\nDevice: {device}")
+
+    if device.type == "cuda":
+        print(f"GPU: {torch.cuda.get_device_name(0)}")
+
+    # =========================================================================
+    # 2. Load tokenizer
+    # =========================================================================
+
+    print(
+        "\n1. Loading tokenizer..."
+    )
+
+    tokenizer = AutoTokenizer.from_pretrained(
+        TOKENIZER_REPO,
+        trust_remote_code=True,
+    )
+
+    print(
+        f"   Tokenizer: {TOKENIZER_REPO}"
+    )
+
+    # =========================================================================
+    # 3. Build chat
+    # =========================================================================
+
+    messages = [
         {
-            "3:0": {
-                0.0000: "3:0/0.0000",
-                0.0312: "3:0/0.0312",
-                ...
-            },
-            "2:1": {
-                ...
-            }
-        }
-    """
-
-    result = {}
-
-    for column in df.columns:
-
-        # Metadata columns do not contain "/"
-        if "/" not in column:
-            continue
-
-        ratio, score = column.split("/")
-
-        score = float(score)
-
-        result.setdefault(
-            ratio,
-            {}
-        )[score] = column
-
-    return result
-
-
-# ============================================================
-# COMPUTE MEAN GRADIENT CURVES
-# ============================================================
-
-def compute_curves(df):
-    """
-    Compute mean gradient for every:
-
-        retrieval ratio × decision score
-
-    Blank / invalid values are ignored.
-
-    The gradient represents:
-
-        ∂L / ∂d
-    """
-
-    columns = get_gradient_columns(df)
-
-    curves = {}
-
-    for ratio, score_columns in columns.items():
-
-        scores = sorted(
-            score_columns.keys()
-        )
-
-        means = []
-        counts = []
-
-        for score in scores:
-
-            column = score_columns[score]
-
-            values = pd.to_numeric(
-                df[column],
-                errors="coerce",
-            ).dropna()
-
-            if len(values) == 0:
-
-                mean_gradient = np.nan
-
-            else:
-
-                mean_gradient = values.mean()
-
-            means.append(
-                mean_gradient
-            )
-
-            counts.append(
-                len(values)
-            )
-
-        curves[ratio] = {
-            "scores": scores,
-            "means": means,
-            "counts": counts,
-        }
-
-    return curves
-
-
-# ============================================================
-# PLOT GRADIENT CURVES
-# ============================================================
-
-def plot_curves(
-    curves,
-    title,
-    output_path,
-):
-    """
-    Plot mean ∂L/∂d vs decision score.
-
-    One line per retrieval ratio.
-
-    The horizontal y=0 line is used as a reference
-    for gradient direction.
-    """
-
-    plt.figure(
-        figsize=(10, 6)
-    )
-
-    for ratio in sorted(
-        curves.keys()
-    ):
-
-        scores = np.array(
-            curves[ratio]["scores"],
-            dtype=float,
-        )
-
-        means = np.array(
-            curves[ratio]["means"],
-            dtype=float,
-        )
-
-        # Keep only valid points
-        valid = ~np.isnan(means)
-
-        scores = scores[valid]
-        means = means[valid]
-
-        # Skip ratio if no valid data
-        if len(scores) == 0:
-            continue
-
-        plt.plot(
-            scores,
-            means,
-            marker="o",
-            markersize=3,
-            linewidth=2,
-            label=ratio,
-        )
-
-    # --------------------------------------------------------
-    # Zero-gradient reference
-    # --------------------------------------------------------
-
-    plt.axhline(
-        y=0,
-        linestyle="--",
-        linewidth=1,
-    )
-
-    # --------------------------------------------------------
-    # Labels
-    # --------------------------------------------------------
-
-    plt.xlabel(
-        "Decision score",
-        fontsize=12,
-    )
-
-    plt.ylabel(
-        r"Mean gradient $\partial L / \partial d$",
-        fontsize=12,
-    )
-
-    plt.title(
-        f"{title}: Mean Gradient vs Decision Score",
-        fontsize=14,
-    )
-
-    # Decision score ∈ [0, 1]
-    plt.xlim(
-        0,
-        1,
-    )
-
-    plt.xticks(
-        np.linspace(
-            0,
-            1,
-            11,
-        )
-    )
-
-    plt.grid(
-        True,
-        alpha=0.3,
-    )
-
-    plt.legend(
-        title="Retrieval ratio"
-    )
-
-    plt.tight_layout()
-
-    plt.savefig(
-        output_path,
-        dpi=300,
-        bbox_inches="tight",
-    )
-
-    plt.close()
-
-    print(
-        f"Saved: {output_path}"
-    )
-
-
-# ============================================================
-# PRINT INFO
-# ============================================================
-
-def print_info(
-    df,
-    curves,
-):
-    """
-    Print basic statistics.
-    """
-
-    print()
-    print("=" * 60)
-    print("2-hop")
-    print("=" * 60)
-
-    print(
-        f"Samples: {len(df):,}"
-    )
-
-    print(
-        f"Ratios: {sorted(curves.keys())}"
-    )
-
-    for ratio in sorted(
-        curves.keys()
-    ):
-
-        counts = curves[ratio]["counts"]
-
-        valid_counts = [
-            count
-            for count in counts
-            if count > 0
-        ]
-
-        if valid_counts:
-
-            print(
-                f"  {ratio}: "
-                f"{min(valid_counts):,} - "
-                f"{max(valid_counts):,} samples"
-            )
-
-
-# ============================================================
-# SAVE SUMMARY CSV
-# ============================================================
-
-def save_summary_csv(
-    curves,
-    output_path,
-):
-    """
-    Save gradient statistics into one
-    long-format CSV.
-
-    Columns:
-
-        retrieval_ratio
-        decision_score
-        mean_gradient
-        n_samples
-    """
-
-    rows = []
-
-    for ratio in sorted(
-        curves.keys()
-    ):
-
-        scores = curves[ratio]["scores"]
-        means = curves[ratio]["means"]
-        counts = curves[ratio]["counts"]
-
-        for (
-            score,
-            mean_gradient,
-            count,
-        ) in zip(
-            scores,
-            means,
-            counts,
-        ):
-
-            rows.append({
-                "retrieval_ratio": ratio,
-                "decision_score": score,
-                "mean_gradient": mean_gradient,
-                "n_samples": count,
-            })
-
-    summary = pd.DataFrame(
-        rows
-    )
-
-    # Consistent ratio ordering
-    ratio_order = [
-        "3:0",
-        "2:1",
-        "1:2",
-        "0:3",
+            "role": "system",
+            "content": SYSTEM_PROMPT,
+        },
+        {
+            "role": "user",
+            "content": QUESTION,
+        },
     ]
 
-    summary["retrieval_ratio"] = pd.Categorical(
-        summary["retrieval_ratio"],
-        categories=ratio_order,
-        ordered=True,
+    # Use the model's official chat template.
+    #
+    # tokenize=True avoids accidentally adding duplicated special tokens.
+    # add_generation_prompt=True adds the assistant-generation prefix.
+    #
+    # Hugging Face recommends this pattern for chat-model generation.
+    inputs = tokenizer.apply_chat_template(
+        messages,
+        tokenize=True,
+        add_generation_prompt=True,
+        return_tensors="pt",
     )
 
-    summary = summary.sort_values(
-        [
-            "retrieval_ratio",
-            "decision_score",
-        ]
-    )
+    # Some Transformers versions return a tensor directly,
+    # while return_dict=True returns a BatchEncoding.
+    if isinstance(inputs, torch.Tensor):
 
-    summary["retrieval_ratio"] = (
-        summary["retrieval_ratio"].astype(str)
-    )
+        input_ids = inputs
 
-    summary.to_csv(
-        output_path,
-        index=False,
-        float_format="%.8f",
-    )
-
-    print(
-        f"Saved summary CSV: {output_path}"
-    )
-
-
-# ============================================================
-# MAIN
-# ============================================================
-
-def main():
-
-    print("=" * 60)
-    print("H2 Gradient Plotting")
-    print("=" * 60)
-
-    # --------------------------------------------------------
-    # Check input file
-    # --------------------------------------------------------
-
-    if not INPUT_FILE.exists():
-
-        raise FileNotFoundError(
-            f"CSV not found:\n{INPUT_FILE.resolve()}"
+        attention_mask = torch.ones_like(
+            input_ids,
+            dtype=torch.long,
         )
 
+    else:
+
+        input_ids = inputs["input_ids"]
+        attention_mask = inputs["attention_mask"]
+
+    input_ids = input_ids.to(device)
+    attention_mask = attention_mask.to(device)
+
+    # =========================================================================
+    # 4. Print formatted prompt
+    # =========================================================================
+
     print(
-        f"\nLoading: {INPUT_FILE.resolve()}"
+        "\n2. Formatted chat prompt:"
     )
 
-    # --------------------------------------------------------
-    # Load CSV
-    # --------------------------------------------------------
+    print("-" * 80)
 
-    df = pd.read_csv(
-        INPUT_FILE,
-        keep_default_na=False,
+    formatted_prompt = tokenizer.decode(
+        input_ids[0],
+        skip_special_tokens=False,
+    )
+
+    print(formatted_prompt)
+
+    print("-" * 80)
+
+    print(
+        f"Prompt tokens: {input_ids.shape[1]}"
+    )
+
+    # =========================================================================
+    # 5. Load ART model
+    # =========================================================================
+
+    print(
+        "\n3. Loading ART demo model..."
+    )
+
+    model = AutoModelForCausalLM.from_pretrained(
+        MODEL_REPO,
+        trust_remote_code=True,
+        dtype=DTYPE,
+        attn_implementation="eager",
+    )
+
+    model = model.to(device)
+    model.eval()
+
+    print(
+        f"   Model: {MODEL_REPO}"
     )
 
     print(
-        f"Samples: {len(df):,}"
+        f"   Model class: {type(model).__name__}"
     )
 
-    # --------------------------------------------------------
-    # Compute curves
-    # --------------------------------------------------------
-
-    curves = compute_curves(
-        df
+    print(
+        f"   Model dtype: "
+        f"{model.model.embed_tokens.weight.dtype}"
     )
 
-    # --------------------------------------------------------
-    # Print statistics
-    # --------------------------------------------------------
+    # =========================================================================
+    # 6. Generation
+    # =========================================================================
 
-    print_info(
-        df,
-        curves,
+    print(
+        "\n4. Generating..."
     )
 
-    # --------------------------------------------------------
-    # Plot
-    # --------------------------------------------------------
-
-    plot_path = (
-        OUTPUT_DIR
-        / "gradient_vs_decision_score_2hop.png"
+    print(
+        f"   Question: {QUESTION}"
     )
-
-    plot_curves(
-        curves,
-        "2-hop",
-        plot_path,
-    )
-
-    # --------------------------------------------------------
-    # Save summary CSV
-    # --------------------------------------------------------
-
-    summary_path = (
-        OUTPUT_DIR
-        / "gradient_summary_2hop.csv"
-    )
-
-    save_summary_csv(
-        curves,
-        summary_path,
-    )
-
-    # --------------------------------------------------------
-    # Done
-    # --------------------------------------------------------
 
     print()
-    print("=" * 60)
-    print("DONE")
-    print("=" * 60)
 
-    print(
-        f"\nOutput directory:\n"
-        f"{OUTPUT_DIR.resolve()}"
+    with torch.inference_mode():
+
+        outputs = model.generate(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+
+            # -----------------------------------------------------------------
+            # ART-specific input
+            #
+            # The question is already present inside the user prompt.
+            # This separate argument is used by ART for retrieval.
+            # -----------------------------------------------------------------
+
+            question=QUESTION,
+
+            # -----------------------------------------------------------------
+            # Generation settings
+            # -----------------------------------------------------------------
+
+            max_new_tokens=256,
+
+            do_sample=False,
+
+            use_cache=True,
+
+            pad_token_id=tokenizer.eos_token_id,
+            eos_token_id=tokenizer.eos_token_id,
+        )
+
+    # =========================================================================
+    # 7. Decode generated answer only
+    # =========================================================================
+
+    prompt_length = input_ids.shape[1]
+
+    generated_ids = outputs[
+        0,
+        prompt_length:,
+    ]
+
+    generated_text = tokenizer.decode(
+        generated_ids,
+        skip_special_tokens=False,
     )
 
-    print("\nGenerated files:")
+    # =========================================================================
+    # 8. Print result
+    # =========================================================================
+
+    print("=" * 80)
+    print("GENERATED RESPONSE")
+    print("=" * 80)
+
+    print(generated_text)
+
+    print("=" * 80)
 
     print(
-        plot_path.resolve()
+        f"Generated tokens: {generated_ids.shape[0]}"
     )
 
     print(
-        summary_path.resolve()
+        f"Total tokens: {outputs.shape[1]}"
     )
 
-
-# ============================================================
-# ENTRY POINT
-# ============================================================
 
 if __name__ == "__main__":
     main()
