@@ -90,6 +90,51 @@ BF16 = True
 
 GRADIENT_CHECKPOINTING = False
 
+# ------------------------------------------------------------
+# Retrieval threshold
+#
+# Must match the threshold used inside the ART model.
+# ------------------------------------------------------------
+
+THRESHOLD = 0.4297
+
+# ------------------------------------------------------------
+# Decision head initialization
+#
+# IMPORTANT:
+#
+# We do NOT initialize the decision head at:
+#
+#     weight = 0
+#     bias   = 0
+#
+# which would produce:
+#
+#     sigmoid(0) = 0.5
+#
+# Since:
+#
+#     0.5 > THRESHOLD
+#
+# the model would retrieve very aggressively from the
+# beginning.
+#
+# Instead:
+#
+#     weight ~ N(0, 0.01)
+#
+#     bias_logit ~ N(logit(0.40), 0.03)
+#
+# Therefore the initial decision is random and centered
+# around 0.40, slightly below the retrieval threshold.
+# ------------------------------------------------------------
+
+DECISION_INIT_MEAN = 0.40
+
+DECISION_INIT_STD = 0.03
+
+DECISION_WEIGHT_STD = 0.01
+
 
 # ============================================================
 # SYSTEM PROMPT
@@ -117,6 +162,221 @@ def set_seed(seed: int) -> None:
     if torch.cuda.is_available():
         torch.cuda.manual_seed(seed)
         torch.cuda.manual_seed_all(seed)
+
+
+# ============================================================
+# DECISION HEAD INITIALIZATION
+# ============================================================
+
+def get_logit_from_probability(
+    probability: float,
+) -> float:
+    """
+    Convert a probability into its corresponding logit.
+
+    logit(p) = log(p / (1 - p))
+    """
+
+    if not 0.0 < probability < 1.0:
+
+        raise ValueError(
+            "Probability must be strictly between 0 and 1."
+        )
+
+    return math.log(
+        probability
+        / (1.0 - probability)
+    )
+
+
+def initialize_decision_head(model) -> None:
+    """
+    Randomly initialize the retrieval decision head.
+
+    Weight:
+        N(0, DECISION_WEIGHT_STD)
+
+    Bias:
+        N(
+            logit(DECISION_INIT_MEAN),
+            DECISION_INIT_STD
+        )
+
+    The resulting decision scores are therefore random
+    rather than being identically 0.5.
+
+    The bias is centered around decision ~= 0.40,
+    which is below THRESHOLD = 0.4297.
+    """
+
+    print()
+    print("=" * 80)
+    print("INITIALIZING RETRIEVAL DECISION HEAD")
+    print("=" * 80)
+
+    projection = (
+        model.retrieval_decision_head
+        .projection
+    )
+
+    # --------------------------------------------------------
+    # Calculate the logit corresponding to the desired
+    # initial decision probability.
+    # --------------------------------------------------------
+
+    initial_bias_mean = get_logit_from_probability(
+        DECISION_INIT_MEAN
+    )
+
+    # --------------------------------------------------------
+    # Random initialization.
+    #
+    # This is deliberately NOT zero initialization.
+    # --------------------------------------------------------
+
+    with torch.no_grad():
+
+        projection.weight.normal_(
+            mean=0.0,
+            std=DECISION_WEIGHT_STD,
+        )
+
+        projection.bias.normal_(
+            mean=initial_bias_mean,
+            std=DECISION_INIT_STD,
+        )
+
+    # --------------------------------------------------------
+    # Read initialized values.
+    # --------------------------------------------------------
+
+    weight = projection.weight
+
+    bias = projection.bias
+
+    weight_mean = (
+        weight.detach()
+        .float()
+        .mean()
+        .item()
+    )
+
+    weight_std = (
+        weight.detach()
+        .float()
+        .std()
+        .item()
+    )
+
+    weight_abs_mean = (
+        weight.detach()
+        .float()
+        .abs()
+        .mean()
+        .item()
+    )
+
+    bias_value = (
+        bias.detach()
+        .float()
+        .item()
+    )
+
+    bias_probability = (
+        torch.sigmoid(
+            torch.tensor(
+                bias_value,
+                dtype=torch.float32,
+            )
+        )
+        .item()
+    )
+
+    print(
+        f"Decision mean target : "
+        f"{DECISION_INIT_MEAN:.6f}"
+    )
+
+    print(
+        f"Decision std target  : "
+        f"{DECISION_INIT_STD:.6f}"
+    )
+
+    print(
+        f"Weight std target    : "
+        f"{DECISION_WEIGHT_STD:.6f}"
+    )
+
+    print(
+        f"Initial bias mean    : "
+        f"{initial_bias_mean:+.6f}"
+    )
+
+    print(
+        f"Weight mean          : "
+        f"{weight_mean:+.6e}"
+    )
+
+    print(
+        f"Weight std           : "
+        f"{weight_std:.6e}"
+    )
+
+    print(
+        f"Weight abs mean      : "
+        f"{weight_abs_mean:.6e}"
+    )
+
+    print(
+        f"Bias                 : "
+        f"{bias_value:+.6f}"
+    )
+
+    print(
+        f"Zero-hidden decision : "
+        f"{bias_probability:.6f}"
+    )
+
+    print(
+        f"Retrieval threshold  : "
+        f"{THRESHOLD:.6f}"
+    )
+
+    print()
+
+    if bias_probability < THRESHOLD:
+
+        print(
+            "✓ Initial zero-hidden decision is below "
+            "the retrieval threshold."
+        )
+
+    else:
+
+        print(
+            "⚠ WARNING: Initial zero-hidden decision "
+            "is above the retrieval threshold."
+        )
+
+    print()
+
+    if (
+        weight_std > 0.0
+        and weight_abs_mean > 0.0
+    ):
+
+        print(
+            "✓ Decision head weights are randomly initialized."
+        )
+
+    else:
+
+        print(
+            "⚠ WARNING: Decision head weights appear "
+            "to be zero."
+        )
+
+    print("=" * 80)
 
 
 # ============================================================
@@ -512,15 +772,17 @@ class ARTDataCollator:
 
 def verify_decision_head(model) -> None:
     """
-    Verify that the loaded model's retrieval decision head
-    starts with:
+    Verify the randomly initialized retrieval decision head.
 
-        weight = 0
-        bias   = 0
+    Unlike the previous version, this function does NOT expect
+    zero weights or zero bias.
 
-    which gives:
+    It checks that:
 
-        sigmoid(0) = 0.5
+        1. weights are non-zero
+        2. bias is finite
+        3. zero-hidden decision is below the threshold
+        4. actual decision is finite
     """
 
     print()
@@ -555,13 +817,20 @@ def verify_decision_head(model) -> None:
         .item()
     )
 
+    weight_std = (
+        weight.detach()
+        .float()
+        .std()
+        .item()
+    )
+
     bias_value = (
         bias.detach()
         .float()
         .item()
     )
 
-    expected_score = torch.sigmoid(
+    zero_hidden_score = torch.sigmoid(
         torch.tensor(
             bias_value,
             dtype=torch.float32,
@@ -579,13 +848,23 @@ def verify_decision_head(model) -> None:
     )
 
     print(
+        f"Weight std      : "
+        f"{weight_std:.6e}"
+    )
+
+    print(
         f"Bias            : "
         f"{bias_value:+.6e}"
     )
 
     print(
         f"Zero-hidden score: "
-        f"{expected_score:.8f}"
+        f"{zero_hidden_score:.8f}"
+    )
+
+    print(
+        f"Threshold       : "
+        f"{THRESHOLD:.8f}"
     )
 
     # --------------------------------------------------------
@@ -622,25 +901,79 @@ def verify_decision_head(model) -> None:
         f"{actual_score:.8f}"
     )
 
-    if (
-        abs(weight_mean) < 1e-7
-        and weight_abs_mean < 1e-7
-        and abs(bias_value) < 1e-7
-        and abs(actual_score - 0.5) < 1e-5
-    ):
+    # --------------------------------------------------------
+    # Verification.
+    # --------------------------------------------------------
 
-        print()
+    weight_is_random = (
+        weight_abs_mean > 0.0
+        and weight_std > 0.0
+    )
+
+    bias_is_finite = math.isfinite(
+        bias_value
+    )
+
+    score_is_finite = math.isfinite(
+        actual_score
+    )
+
+    score_is_below_threshold = (
+        actual_score < THRESHOLD
+    )
+
+    print()
+
+    if weight_is_random:
+
         print(
-            "✓ Retrieval decision head is initialized "
-            "correctly at score ≈ 0.5."
+            "✓ Decision head weight is non-zero "
+            "and randomly initialized."
         )
 
     else:
 
-        print()
         print(
-            "⚠ WARNING: Retrieval decision head "
-            "is not initialized at zero."
+            "⚠ WARNING: Decision head weight "
+            "appears to be zero."
+        )
+
+    if bias_is_finite:
+
+        print(
+            "✓ Decision head bias is finite."
+        )
+
+    else:
+
+        print(
+            "⚠ WARNING: Decision head bias is not finite."
+        )
+
+    if score_is_finite:
+
+        print(
+            "✓ Decision score is finite."
+        )
+
+    else:
+
+        print(
+            "⚠ WARNING: Decision score is not finite."
+        )
+
+    if score_is_below_threshold:
+
+        print(
+            "✓ Initial zero-hidden decision is below "
+            "the retrieval threshold."
+        )
+
+    else:
+
+        print(
+            "⚠ WARNING: Initial zero-hidden decision is "
+            "above the retrieval threshold."
         )
 
     print("=" * 80)
@@ -692,9 +1025,6 @@ def freeze_backbone(model) -> None:
 
     # --------------------------------------------------------
     # 3. Calculate number of layers to unfreeze.
-    #
-    # Use ceil so the number is never below the requested
-    # percentage.
     # --------------------------------------------------------
 
     num_layers_to_unfreeze = math.ceil(
@@ -1149,20 +1479,29 @@ def main():
     )
 
     # ========================================================
-    # 9. VERIFY DECISION HEAD
+    # 9. RANDOMIZE DECISION HEAD
     # ========================================================
 
     print()
-    print("8. Verifying decision head...")
+    print("8. Randomly initializing decision head...")
+
+    initialize_decision_head(model)
+
+    # ========================================================
+    # 10. VERIFY DECISION HEAD
+    # ========================================================
+
+    print()
+    print("9. Verifying decision head...")
 
     verify_decision_head(model)
 
     # ========================================================
-    # 10. ART TRAINING MODE
+    # 11. ART TRAINING MODE
     # ========================================================
 
     print()
-    print("9. Enabling ART training mode...")
+    print("10. Enabling ART training mode...")
 
     model.enable_training_mode()
 
@@ -1172,7 +1511,7 @@ def main():
     )
 
     # ========================================================
-    # 11. DISABLE GRADIENT CHECKPOINTING
+    # 12. DISABLE GRADIENT CHECKPOINTING
     # ========================================================
 
     print()
@@ -1201,22 +1540,22 @@ def main():
     print("=" * 80)
 
     # ========================================================
-    # 12. FREEZE / UNFREEZE
+    # 13. FREEZE / UNFREEZE
     # ========================================================
 
     print()
-    print("10. Configuring trainable layers...")
+    print("11. Configuring trainable layers...")
 
     freeze_backbone(model)
 
     print_parameter_summary(model)
 
     # ========================================================
-    # 13. DATA COLLATOR
+    # 14. DATA COLLATOR
     # ========================================================
 
     print()
-    print("11. Creating data collator...")
+    print("12. Creating data collator...")
 
     data_collator = ARTDataCollator()
 
@@ -1225,11 +1564,11 @@ def main():
     )
 
     # ========================================================
-    # 14. TRAINING ARGUMENTS
+    # 15. TRAINING ARGUMENTS
     # ========================================================
 
     print()
-    print("12. Creating TrainingArguments...")
+    print("13. Creating TrainingArguments...")
 
     if BF16:
 
@@ -1386,12 +1725,32 @@ def main():
         f"{GRADIENT_CHECKPOINTING}"
     )
 
+    print(
+        f"Decision init mean: "
+        f"{DECISION_INIT_MEAN}"
+    )
+
+    print(
+        f"Decision init std: "
+        f"{DECISION_INIT_STD}"
+    )
+
+    print(
+        f"Decision weight std: "
+        f"{DECISION_WEIGHT_STD}"
+    )
+
+    print(
+        f"Decision threshold: "
+        f"{THRESHOLD}"
+    )
+
     # ========================================================
-    # 15. TRAINER
+    # 16. TRAINER
     # ========================================================
 
     print()
-    print("13. Creating ART Trainer...")
+    print("14. Creating ART Trainer...")
 
     trainer = ARTTrainer(
         model=model,
@@ -1417,7 +1776,7 @@ def main():
     )
 
     # ========================================================
-    # 16. MEMORY BEFORE TRAINING
+    # 17. MEMORY BEFORE TRAINING
     # ========================================================
 
     if torch.cuda.is_available():
@@ -1429,18 +1788,18 @@ def main():
         )
 
     # ========================================================
-    # 17. TRAIN
+    # 18. TRAIN
     # ========================================================
 
     print()
     print("=" * 80)
-    print("14. START TRAINING")
+    print("15. START TRAINING")
     print("=" * 80)
 
     train_result = trainer.train()
 
     # ========================================================
-    # 18. TRAINING RESULT
+    # 19. TRAINING RESULT
     # ========================================================
 
     print()
@@ -1461,7 +1820,7 @@ def main():
     print("=" * 80)
 
     # ========================================================
-    # 19. MEMORY AFTER TRAINING
+    # 20. MEMORY AFTER TRAINING
     # ========================================================
 
     if torch.cuda.is_available():
@@ -1471,11 +1830,11 @@ def main():
         )
 
     # ========================================================
-    # 20. FINAL DECISION HEAD
+    # 21. FINAL DECISION HEAD
     # ========================================================
 
     print()
-    print("15. Checking final decision head...")
+    print("16. Checking final decision head...")
 
     weight = (
         model.retrieval_decision_head
@@ -1487,6 +1846,23 @@ def main():
         model.retrieval_decision_head
         .projection
         .bias
+    )
+
+    final_bias_value = (
+        bias.detach()
+        .float()
+        .cpu()
+        .item()
+    )
+
+    final_zero_hidden_score = (
+        torch.sigmoid(
+            torch.tensor(
+                final_bias_value,
+                dtype=torch.float32,
+            )
+        )
+        .item()
     )
 
     print()
@@ -1505,14 +1881,29 @@ def main():
     )
 
     print(
+        f"Weight std      : "
+        f"{weight.detach().float().std().item():.6e}"
+    )
+
+    print(
         f"Bias            : "
-        f"{bias.detach().float().cpu().numpy()}"
+        f"{final_bias_value:+.6e}"
+    )
+
+    print(
+        f"Zero-hidden score: "
+        f"{final_zero_hidden_score:.8f}"
+    )
+
+    print(
+        f"Threshold       : "
+        f"{THRESHOLD:.8f}"
     )
 
     print("=" * 80)
 
     # ========================================================
-    # 21. ART STATE
+    # 22. ART STATE
     # ========================================================
 
     print()
@@ -1593,7 +1984,7 @@ def main():
     print("=" * 80)
 
     # ========================================================
-    # 22. SAVE FINAL MODEL
+    # 23. SAVE FINAL MODEL
     # ========================================================
 
     print()
@@ -1617,7 +2008,7 @@ def main():
     print("=" * 80)
 
     # ========================================================
-    # 23. CLEANUP
+    # 24. CLEANUP
     # ========================================================
 
     print()
