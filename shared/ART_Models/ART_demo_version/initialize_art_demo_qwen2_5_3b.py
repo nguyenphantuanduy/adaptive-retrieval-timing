@@ -15,7 +15,7 @@ The custom ART demo model may contain additional parameters, such as:
     retrieval_decision_head.*
 
 Those additional parameters are intentionally excluded from the compatibility
-check and weight transfer from Qwen.
+check and weight transfer from Qwen. Their initialized values are preserved.
 """
 
 from __future__ import annotations
@@ -278,7 +278,7 @@ def main() -> None:
         config,
         trust_remote_code=True,
         attn_implementation="eager",
-        torch_dtype=DTYPE,
+        dtype=DTYPE,
     )
 
     print(
@@ -301,7 +301,7 @@ def main() -> None:
 
     qwen = AutoModelForCausalLM.from_pretrained(
         QWEN_REPO,
-        torch_dtype=DTYPE,
+        dtype=DTYPE,
         device_map="cpu",
     )
 
@@ -338,18 +338,46 @@ def main() -> None:
         "\n4. Transferring Qwen weights into ART demo..."
     )
 
-    # Only Qwen parameters are provided here.
+    # -------------------------------------------------------------------------
+    # IMPORTANT:
     #
-    # Additional ART demo parameters, for example:
+    # The ART demo contains all Qwen parameters PLUS ART-specific parameters.
+    #
+    # Therefore, instead of calling:
+    #
+    #     demo.load_state_dict(qwen_state, strict=False)
+    #
+    # we merge the Qwen weights into the complete ART state dict.
+    #
+    # This preserves ART-specific parameters such as:
     #
     #     retrieval_decision_head.projection.weight
     #     retrieval_decision_head.projection.bias
     #
-    # are not overwritten and keep their initialized values.
+    # with their initialized values.
+    #
+    # After merging, strict=True is used so that the final ART model state
+    # dict must be internally complete.
+    # -------------------------------------------------------------------------
 
-    missing_keys, unexpected_keys = demo.load_state_dict(
-        qwen_state,
-        strict=False,
+    merged_state = demo.state_dict()
+
+    for name, tensor in qwen_state.items():
+
+        merged_state[name] = tensor
+
+    demo.load_state_dict(
+        merged_state,
+        strict=True,
+    )
+
+    print(
+        f"   Transferred {len(qwen_state)} Qwen state-dict tensors."
+    )
+
+    print(
+        "   ART-specific parameters were preserved "
+        "with their initialized values."
     )
 
     # =========================================================================
@@ -359,28 +387,6 @@ def main() -> None:
     print(
         "\n5. Verifying transferred weights..."
     )
-
-    if missing_keys:
-
-        print_names(
-            "Unexpected missing keys after transfer",
-            sorted(missing_keys),
-        )
-
-        raise RuntimeError(
-            "Some Qwen parameters were not transferred."
-        )
-
-    if unexpected_keys:
-
-        print_names(
-            "Unexpected keys reported by load_state_dict",
-            sorted(unexpected_keys),
-        )
-
-        raise RuntimeError(
-            "Unexpected keys encountered during weight transfer."
-        )
 
     verify_transferred_values(
         demo_state=demo.state_dict(),
@@ -415,6 +421,7 @@ def main() -> None:
     del qwen
     del qwen_state
     del demo_state
+    del merged_state
 
     gc.collect()
 
