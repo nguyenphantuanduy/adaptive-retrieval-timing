@@ -14,8 +14,8 @@ TOKENIZER_REPO = "Qwen/Qwen2.5-3B-Instruct"
 DTYPE = torch.bfloat16
 
 QUESTION = (
-    "Who started the Bethel branch of the religion "
-    "the black community founded in the former US capital?"
+    "Who was the person that started the Bethel branch of the religion "
+    "founded by the black community in the former US capital?"
 )
 
 SYSTEM_PROMPT = """You are a helpful assistant that can solve the given question step by step.

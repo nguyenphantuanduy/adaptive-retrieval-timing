@@ -317,9 +317,7 @@ class AttentionMixingProbeForCausalLM(
         self.max_retrievals = 4
         self.retrieval_count = 0
 
-        self.retriever = MuSiQueRetrievalDB(
-            top_k=3,
-        )
+        self.retriever = None
 
         # Initialize weights and apply final processing
         self.post_init()
@@ -329,6 +327,13 @@ class AttentionMixingProbeForCausalLM(
 
     def disable_training_mode(self):
         self.isTraining = False
+
+    def _get_retriever(self):
+        if self.retriever is None:
+            self.retriever = MuSiQueRetrievalDB(
+                top_k=3,
+            )
+        return self.retriever
 
     # =========================================================================
     # Forward dispatcher
@@ -548,7 +553,8 @@ class AttentionMixingProbeForCausalLM(
             # 7.1 Retrieve using original question
             # -----------------------------------------------------------------
 
-            retrieval_text = self.retriever.search(
+            
+            retrieval_text = self._get_retriever().search(
                 question
             )
 
@@ -558,7 +564,7 @@ class AttentionMixingProbeForCausalLM(
             # 7.2 Tokenize retrieved document
             # -----------------------------------------------------------------
 
-            document_inputs = self.retriever.tokenizer(
+            document_inputs = past_key_values.tokenizer(
                 retrieval_text,
                 return_tensors="pt",
                 truncation=True,
@@ -785,7 +791,7 @@ class AttentionMixingProbeForCausalLM(
                 # -------------------------------------------------------------
 
                 retrieval_text = (
-                    self.retriever.search(
+                    self._get_retriever().search(
                         retrieval_query
                     )
                 )
@@ -797,7 +803,7 @@ class AttentionMixingProbeForCausalLM(
                 # -------------------------------------------------------------
 
                 document_inputs = (
-                    self.retriever.tokenizer(
+                    past_key_values.tokenizer(
                         retrieval_text,
                         return_tensors="pt",
                         truncation=True,
@@ -1237,7 +1243,7 @@ class AttentionMixingProbeForCausalLM(
                 # 6.2.2 Retrieve
                 # -------------------------------------------------------------
 
-                retrieval_text = self.retriever.search(
+                retrieval_text = self._get_retriever().search(
                     retrieval_query
                 )
 
@@ -1247,7 +1253,7 @@ class AttentionMixingProbeForCausalLM(
                 # 6.2.3 Tokenize retrieved document
                 # -------------------------------------------------------------
 
-                document_inputs = self.retriever.tokenizer(
+                document_inputs = past_key_values.tokenizer(
                     retrieval_text,
                     return_tensors="pt",
                     truncation=True,
