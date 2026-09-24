@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import gc
+
 import torch
 
 from datasets import Dataset
@@ -31,11 +33,12 @@ LEARNING_RATE = 1e-5
 
 MAX_STEPS = 1
 
+# Freeze first 60% of Qwen decoder layers.
 FREEZE_RATIO = 0.60
 
 
 # =============================================================================
-# TEST SAMPLE
+# ONE TEST SAMPLE
 # =============================================================================
 
 QUESTION = (
@@ -56,155 +59,143 @@ When you know the final answer, provide the final answer clearly."""
 
 
 # =============================================================================
-# DECISION HEAD INITIALIZATION
+# INITIALIZE RETRIEVAL DECISION HEAD
 # =============================================================================
 
 def initialize_decision_head(model):
     """
-    Initialize the ART decision head so that:
+    Initialize retrieval decision head so that the initial decision score
+    is slightly above the current retrieval threshold.
 
-        sigmoid(Wx + b) ~= 0.525
+    weight = 0
+    bias   = 0.1
 
-    for every hidden state.
-
-    This is only for the one-sample training sanity check.
+    sigmoid(0.1) ~= 0.525
     """
 
-    with torch.no_grad():
+    print()
+    print("=" * 80)
+    print("INITIALIZING RETRIEVAL DECISION HEAD")
+    print("=" * 80)
 
+    with torch.no_grad():
         model.retrieval_decision_head.projection.weight.zero_()
 
         model.retrieval_decision_head.projection.bias.fill_(0.1)
 
     expected_score = torch.sigmoid(
-        torch.tensor(0.1)
+        torch.tensor(
+            0.1,
+            dtype=torch.float32,
+        )
     ).item()
 
-    print("\n" + "=" * 80)
-    print("DECISION HEAD INITIALIZATION")
-    print("=" * 80)
-
-    print("Weight : ZERO")
-    print("Bias   : 0.1")
-
-    print(
-        f"Initial decision score: "
-        f"{expected_score:.6f}"
-    )
-
+    print(f"Weight initialized to : 0")
+    print(f"Bias initialized to   : 0.1")
+    print(f"Expected score        : {expected_score:.6f}")
     print("=" * 80)
 
 
 # =============================================================================
-# FREEZE 60% OF DECODER LAYERS
+# FREEZE BACKBONE
 # =============================================================================
 
 def freeze_backbone(model):
     """
-    Freeze the first 60% of decoder layers.
+    Freeze first FREEZE_RATIO of decoder layers.
 
-    Trainable:
-        - last 40% decoder layers
-        - final RMSNorm
-        - RetrievalDecisionHead
+    For Qwen2.5-3B:
+        36 layers
+        60% -> 21 frozen layers
+        15 trainable decoder layers
 
-    Frozen:
-        - embedding
-        - first 60% decoder layers
-        - LM head
-        - rotary embedding
+    Additionally:
+        - embedding: frozen
+        - rotary embedding: frozen
+        - lm_head: frozen
+        - final norm: trainable
+        - retrieval decision head: trainable
     """
+
+    print()
+    print("=" * 80)
+    print("FREEZING BACKBONE")
+    print("=" * 80)
 
     layers = model.model.layers
 
     num_layers = len(layers)
 
-    num_frozen_layers = int(
-        num_layers * FREEZE_RATIO
-    )
+    num_frozen_layers = int(num_layers * FREEZE_RATIO)
 
-    print("\n" + "=" * 80)
-    print("FREEZE CONFIGURATION")
-    print("=" * 80)
+    print(f"Total decoder layers : {num_layers}")
+    print(f"Freeze ratio          : {FREEZE_RATIO:.2f}")
+    print(f"Frozen layers         : {num_frozen_layers}")
+    print(f"Trainable layers      : {num_layers - num_frozen_layers}")
+    print()
 
-    print(
-        f"Total decoder layers : {num_layers}"
-    )
-
-    print(
-        f"Freeze ratio         : "
-        f"{FREEZE_RATIO:.0%}"
-    )
-
-    print(
-        f"Frozen layers        : "
-        f"{num_frozen_layers}"
-    )
-
-    print(
-        f"Trainable layers     : "
-        f"{num_layers - num_frozen_layers}"
-    )
-
-    # =========================================================================
+    # -------------------------------------------------------------------------
     # Embedding
-    # =========================================================================
+    # -------------------------------------------------------------------------
 
     for param in model.model.embed_tokens.parameters():
         param.requires_grad = False
 
-    # =========================================================================
+    print("Embedding: FROZEN")
+
+    # -------------------------------------------------------------------------
     # Decoder layers
-    # =========================================================================
+    # -------------------------------------------------------------------------
 
     for layer_idx, layer in enumerate(layers):
 
-        frozen = (
-            layer_idx < num_frozen_layers
-        )
+        frozen = layer_idx < num_frozen_layers
 
         for param in layer.parameters():
             param.requires_grad = not frozen
 
-        status = (
-            "FROZEN"
-            if frozen
-            else "TRAINABLE"
-        )
+        status = "FROZEN" if frozen else "TRAINABLE"
 
         print(
             f"Layer {layer_idx:02d}: {status}"
         )
 
-    # =========================================================================
-    # Final normalization
-    # =========================================================================
+    # -------------------------------------------------------------------------
+    # Final norm
+    # -------------------------------------------------------------------------
 
     for param in model.model.norm.parameters():
         param.requires_grad = True
 
-    # =========================================================================
+    print()
+    print("Final norm: TRAINABLE")
+
+    # -------------------------------------------------------------------------
     # Rotary embedding
-    # =========================================================================
+    # -------------------------------------------------------------------------
 
     for param in model.model.rotary_emb.parameters():
         param.requires_grad = False
 
-    # =========================================================================
+    print("Rotary embedding: FROZEN")
+
+    # -------------------------------------------------------------------------
     # LM head
-    #
-    # Qwen uses tied embeddings.
-    # =========================================================================
+    # -------------------------------------------------------------------------
 
     for param in model.lm_head.parameters():
         param.requires_grad = False
 
-    # =========================================================================
-    # ART decision head
-    # =========================================================================
+    print("LM head: FROZEN")
+
+    # -------------------------------------------------------------------------
+    # Retrieval decision head
+    # -------------------------------------------------------------------------
 
     for param in model.retrieval_decision_head.parameters():
         param.requires_grad = True
+
+    print("Retrieval decision head: TRAINABLE")
 
     print("=" * 80)
 
@@ -215,44 +206,42 @@ def freeze_backbone(model):
 
 def print_parameter_summary(model):
 
-    total_params = 0
-    trainable_params = 0
+    total_params = sum(
+        param.numel()
+        for param in model.parameters()
+    )
 
-    for param in model.parameters():
+    trainable_params = sum(
+        param.numel()
+        for param in model.parameters()
+        if param.requires_grad
+    )
 
-        num_params = param.numel()
+    frozen_params = total_params - trainable_params
 
-        total_params += num_params
-
-        if param.requires_grad:
-            trainable_params += num_params
-
-    percentage = (
+    trainable_percentage = (
         100.0 * trainable_params / total_params
     )
 
-    print("\n" + "=" * 80)
+    print()
+    print("=" * 80)
     print("PARAMETER SUMMARY")
     print("=" * 80)
 
     print(
-        f"Total parameters     : "
-        f"{total_params:,}"
+        f"Total parameters     : {total_params:,}"
     )
 
     print(
-        f"Trainable parameters : "
-        f"{trainable_params:,}"
+        f"Trainable parameters : {trainable_params:,}"
     )
 
     print(
-        f"Frozen parameters    : "
-        f"{total_params - trainable_params:,}"
+        f"Frozen parameters    : {frozen_params:,}"
     )
 
     print(
-        f"Trainable percentage : "
-        f"{percentage:.4f}%"
+        f"Trainable percentage : {trainable_percentage:.4f}%"
     )
 
     print("=" * 80)
@@ -264,9 +253,14 @@ def print_parameter_summary(model):
 
 def build_sample(tokenizer):
 
-    # =========================================================================
-    # Question
-    # =========================================================================
+    print()
+    print("=" * 80)
+    print("BUILDING ONE SAMPLE")
+    print("=" * 80)
+
+    # -------------------------------------------------------------------------
+    # Build question using Qwen chat template
+    # -------------------------------------------------------------------------
 
     messages = [
         {
@@ -287,20 +281,16 @@ def build_sample(tokenizer):
     )
 
     if isinstance(question, torch.Tensor):
-
         question_input_ids = question
-
     else:
-
         question_input_ids = question["input_ids"]
 
-    question_input_ids = (
-        question_input_ids[0]
-    )
+    # Remove batch dimension.
+    question_input_ids = question_input_ids[0]
 
-    # =========================================================================
-    # Answer
-    # =========================================================================
+    # -------------------------------------------------------------------------
+    # Tokenize answer
+    # -------------------------------------------------------------------------
 
     answer_input_ids = tokenizer(
         ANSWER,
@@ -310,39 +300,25 @@ def build_sample(tokenizer):
         add_special_tokens=False,
     )["input_ids"][0]
 
-    # =========================================================================
-    # Initial attention mask
-    #
-    # Only question tokens exist at this point.
-    #
-    # forward_training() will extend this mask when:
-    #
-    #   question
-    #   -> document
-    #   -> sentence
-    #   -> document
-    #   -> ...
-    #
-    # =========================================================================
-
-    question_length = (
-        question_input_ids.shape[0]
-    )
+    # -------------------------------------------------------------------------
+    # Question attention mask
+    # -------------------------------------------------------------------------
 
     attention_mask = torch.ones(
-        question_length,
+        question_input_ids.shape[0],
         dtype=torch.long,
     )
 
-    # =========================================================================
-    # Labels
+    # -------------------------------------------------------------------------
+    # Initial labels
     #
-    # forward_training() expects labels covering:
+    # At this stage:
     #
-    #   question + answer
+    # [question tokens] + [answer tokens]
     #
-    # and dynamically inserts -100 for retrieved documents.
-    # =========================================================================
+    # forward_training() will later modify labels when retrieval documents
+    # are inserted.
+    # -------------------------------------------------------------------------
 
     labels = torch.cat(
         [
@@ -352,20 +328,28 @@ def build_sample(tokenizer):
         dim=0,
     )
 
+    print(
+        f"Question tokens : {question_input_ids.shape[0]}"
+    )
+
+    print(
+        f"Answer tokens   : {answer_input_ids.shape[0]}"
+    )
+
+    print(
+        f"Initial labels  : {labels.shape[0]}"
+    )
+
+    print()
+
     return {
         "question": QUESTION,
 
-        "question_input_ids": (
-            question_input_ids
-        ),
+        "question_input_ids": question_input_ids,
 
-        "answer_input_ids": (
-            answer_input_ids
-        ),
+        "answer_input_ids": answer_input_ids,
 
-        "attention_mask": (
-            attention_mask
-        ),
+        "attention_mask": attention_mask,
 
         "labels": labels,
     }
@@ -376,6 +360,15 @@ def build_sample(tokenizer):
 # =============================================================================
 
 class ARTDataCollator:
+    """
+    Batch exactly one ART sample.
+
+    This test intentionally uses batch_size=1 because the current
+    forward_training() logic is designed around one sample / one question.
+
+    The collator explicitly converts the sequence fields to torch.Tensor,
+    so it works whether Dataset returns Python lists or tensors.
+    """
 
     def __call__(self, features):
 
@@ -386,27 +379,51 @@ class ARTDataCollator:
 
         sample = features[0]
 
+        # ---------------------------------------------------------------------
+        # Convert to tensors robustly.
+        # ---------------------------------------------------------------------
+
+        question_input_ids = torch.as_tensor(
+            sample["question_input_ids"],
+            dtype=torch.long,
+        )
+
+        answer_input_ids = torch.as_tensor(
+            sample["answer_input_ids"],
+            dtype=torch.long,
+        )
+
+        attention_mask = torch.as_tensor(
+            sample["attention_mask"],
+            dtype=torch.long,
+        )
+
+        labels = torch.as_tensor(
+            sample["labels"],
+            dtype=torch.long,
+        )
+
+        # ---------------------------------------------------------------------
+        # Add batch dimension.
+        # ---------------------------------------------------------------------
+
         return {
             "question": sample["question"],
 
             "question_input_ids": (
-                sample["question_input_ids"]
-                .unsqueeze(0)
+                question_input_ids.unsqueeze(0)
             ),
 
             "answer_input_ids": (
-                sample["answer_input_ids"]
-                .unsqueeze(0)
+                answer_input_ids.unsqueeze(0)
             ),
 
             "attention_mask": (
-                sample["attention_mask"]
-                .unsqueeze(0)
+                attention_mask.unsqueeze(0)
             ),
 
             "labels": (
-                sample["labels"]
-                .unsqueeze(0)
+                labels.unsqueeze(0)
             ),
         }
 
@@ -417,101 +434,225 @@ class ARTDataCollator:
 
 def inspect_gradients(model):
 
-    print("\n" + "=" * 80)
+    print()
+    print("=" * 80)
     print("GRADIENT INSPECTION")
     print("=" * 80)
 
-    # =========================================================================
-    # Decision head
-    # =========================================================================
+    # -------------------------------------------------------------------------
+    # Retrieval decision head
+    # -------------------------------------------------------------------------
 
-    print("\n[Decision Head]")
+    decision_weight = (
+        model.retrieval_decision_head
+        .projection
+        .weight
+    )
 
-    for name, param in (
-        model.retrieval_decision_head.named_parameters()
-    ):
+    decision_bias = (
+        model.retrieval_decision_head
+        .projection
+        .bias
+    )
 
-        if param.grad is None:
+    print()
+    print("Retrieval decision head:")
 
-            print(
-                f"{name}: grad=None"
-            )
-
-        else:
-
-            grad = param.grad.detach().float()
-
-            print(
-                f"{name}: "
-                f"shape={tuple(grad.shape)}, "
-                f"mean={grad.mean().item():+.6e}, "
-                f"abs_mean={grad.abs().mean().item():.6e}, "
-                f"max={grad.abs().max().item():.6e}"
-            )
-
-    # =========================================================================
-    # First frozen layer
-    # =========================================================================
-
-    print("\n[First Frozen Layer]")
-
-    first_layer = model.model.layers[0]
-
-    frozen_has_grad = False
-
-    for name, param in first_layer.named_parameters():
-
-        if param.grad is not None:
-
-            frozen_has_grad = True
-
-            print(
-                f"WARNING: {name} has gradient!"
-            )
-
-    if not frozen_has_grad:
-
+    if decision_weight.grad is None:
+        print("  Weight gradient : NONE")
+    else:
         print(
-            "OK: no gradients."
+            "  Weight gradient : "
+            f"mean={decision_weight.grad.mean().item():+.6e}, "
+            f"abs_mean={decision_weight.grad.abs().mean().item():.6e}, "
+            f"max={decision_weight.grad.abs().max().item():.6e}"
         )
 
-    # =========================================================================
+    if decision_bias.grad is None:
+        print("  Bias gradient   : NONE")
+    else:
+        print(
+            "  Bias gradient   : "
+            f"{decision_bias.grad.detach().cpu().numpy()}"
+        )
+
+    # -------------------------------------------------------------------------
+    # First frozen layer
+    # -------------------------------------------------------------------------
+
+    layers = model.model.layers
+
+    frozen_layer = layers[0]
+
+    frozen_grads = [
+        param.grad
+        for param in frozen_layer.parameters()
+        if param.grad is not None
+    ]
+
+    print()
+    print("Layer 00 (FROZEN):")
+
+    if len(frozen_grads) == 0:
+        print("  Gradient: NONE ✓")
+    else:
+        print(
+            f"  Gradient tensors found: {len(frozen_grads)}"
+        )
+
+    # -------------------------------------------------------------------------
     # First trainable layer
-    # =========================================================================
+    # -------------------------------------------------------------------------
 
     trainable_layer_idx = int(
-        len(model.model.layers) * FREEZE_RATIO
+        len(layers) * FREEZE_RATIO
+    )
+
+    trainable_layer = layers[trainable_layer_idx]
+
+    trainable_grads = [
+        param.grad
+        for param in trainable_layer.parameters()
+        if param.grad is not None
+    ]
+
+    print()
+    print(
+        f"Layer {trainable_layer_idx:02d} (TRAINABLE):"
+    )
+
+    if len(trainable_grads) == 0:
+        print("  Gradient: NONE")
+    else:
+
+        total_grad_norm = 0.0
+
+        for grad in trainable_grads:
+            total_grad_norm += (
+                grad.detach()
+                .float()
+                .norm()
+                .item() ** 2
+            )
+
+        total_grad_norm = total_grad_norm ** 0.5
+
+        print(
+            f"  Gradient tensors : {len(trainable_grads)}"
+        )
+
+        print(
+            f"  Total grad norm  : {total_grad_norm:.6e}"
+        )
+
+    print("=" * 80)
+
+
+# =============================================================================
+# DECISION HEAD STATE
+# =============================================================================
+
+def inspect_decision_head(model, title):
+
+    print()
+    print("=" * 80)
+    print(title)
+    print("=" * 80)
+
+    weight = (
+        model.retrieval_decision_head
+        .projection
+        .weight
+    )
+
+    bias = (
+        model.retrieval_decision_head
+        .projection
+        .bias
     )
 
     print(
-        f"\n[First Trainable Layer: "
-        f"{trainable_layer_idx}]"
+        f"Weight mean: "
+        f"{weight.detach().float().mean().item():+.6e}"
     )
 
-    trainable_layer = model.model.layers[
-        trainable_layer_idx
-    ]
+    print(
+        f"Weight abs mean: "
+        f"{weight.detach().float().abs().mean().item():.6e}"
+    )
 
-    trainable_has_grad = False
+    print(
+        f"Bias: "
+        f"{bias.detach().float().cpu().numpy()}"
+    )
 
-    for name, param in trainable_layer.named_parameters():
+    # -------------------------------------------------------------------------
+    # Since weight is initialized to zero, score should be determined by bias.
+    # Use a zero hidden state to inspect the baseline decision score.
+    # -------------------------------------------------------------------------
 
-        if param.grad is not None:
+    hidden_size = model.config.hidden_size
 
-            trainable_has_grad = True
+    zero_hidden = torch.zeros(
+        1,
+        1,
+        hidden_size,
+        device=weight.device,
+        dtype=weight.dtype,
+    )
 
-            grad = param.grad.detach().float()
+    with torch.no_grad():
 
-            print(
-                f"{name}: "
-                f"mean={grad.mean().item():+.6e}, "
-                f"abs_mean={grad.abs().mean().item():.6e}"
+        decision_score = (
+            model.retrieval_decision_head(
+                zero_hidden
             )
+        )
 
-    if not trainable_has_grad:
+    print(
+        f"Decision score: "
+        f"{decision_score.detach().float().cpu().numpy()}"
+    )
+
+    print("=" * 80)
+
+
+# =============================================================================
+# GPU MEMORY
+# =============================================================================
+
+def print_gpu_memory(title):
+
+    if not torch.cuda.is_available():
+        return
+
+    print()
+    print("=" * 80)
+    print(title)
+    print("=" * 80)
+
+    for gpu_idx in range(torch.cuda.device_count()):
+
+        allocated = (
+            torch.cuda.memory_allocated(gpu_idx)
+            / (1024 ** 3)
+        )
+
+        reserved = (
+            torch.cuda.memory_reserved(gpu_idx)
+            / (1024 ** 3)
+        )
+
+        peak = (
+            torch.cuda.max_memory_allocated(gpu_idx)
+            / (1024 ** 3)
+        )
 
         print(
-            "WARNING: no gradients."
+            f"GPU {gpu_idx}: "
+            f"allocated={allocated:.2f} GB, "
+            f"reserved={reserved:.2f} GB, "
+            f"peak={peak:.2f} GB"
         )
 
     print("=" * 80)
@@ -523,15 +664,26 @@ def inspect_gradients(model):
 
 def main():
 
+    # =========================================================================
+    # 1. Seed
+    # =========================================================================
+
+    print()
+    print("=" * 80)
+    print("ART ONE-SAMPLE TRAINING TEST")
+    print("=" * 80)
+
+    print()
+    print("1. Setting seed...")
+
     set_seed(SEED)
 
-    print("=" * 80)
-    print("ART — ONE SAMPLE TRAINING TEST")
-    print("=" * 80)
+    # =========================================================================
+    # 2. Device
+    # =========================================================================
 
-    # =========================================================================
-    # DEVICE
-    # =========================================================================
+    print()
+    print("2. Checking device...")
 
     device = torch.device(
         "cuda"
@@ -540,37 +692,38 @@ def main():
     )
 
     print(
-        f"\nDevice: {device}"
+        f"Device: {device}"
     )
 
-    if device.type == "cuda":
+    if torch.cuda.is_available():
 
         print(
             f"GPU: "
             f"{torch.cuda.get_device_name(0)}"
         )
 
-        print(
-            f"CUDA: "
-            f"{torch.version.cuda}"
-        )
-
     # =========================================================================
-    # TOKENIZER
+    # 3. Load tokenizer
     # =========================================================================
 
-    print("\n1. Loading tokenizer...")
+    print()
+    print("3. Loading tokenizer...")
 
     tokenizer = AutoTokenizer.from_pretrained(
         TOKENIZER_REPO,
         trust_remote_code=True,
     )
 
+    print(
+        f"Tokenizer loaded: {TOKENIZER_REPO}"
+    )
+
     # =========================================================================
-    # MODEL
+    # 4. Load model
     # =========================================================================
 
-    print("\n2. Loading ART model...")
+    print()
+    print("4. Loading model...")
 
     model = AutoModelForCausalLM.from_pretrained(
         MODEL_REPO,
@@ -579,99 +732,142 @@ def main():
         attn_implementation="eager",
     )
 
+    print(
+        f"Model loaded: {MODEL_REPO}"
+    )
+
+    # =========================================================================
+    # 5. Move model to device
+    # =========================================================================
+
+    print()
+    print("5. Moving model to device...")
+
     model = model.to(device)
 
-    print(
-        f"Model class: "
-        f"{type(model).__name__}"
-    )
-
-    print(
-        f"Model dtype: "
-        f"{model.model.embed_tokens.weight.dtype}"
-    )
-
     # =========================================================================
-    # ART TRAINING MODE
+    # Enable ART training mode
     # =========================================================================
 
-    print("\n3. Enabling ART training mode...")
+    print()
+    print("Enabling ART training mode...")
 
     model.enable_training_mode()
 
     print(
-        f"isTraining = "
-        f"{model.isTraining}"
+        f"model.isTraining = {model.isTraining}"
     )
 
     # =========================================================================
-    # DECISION HEAD
+    # Initialize decision head
     # =========================================================================
-
-    print("\n4. Initializing decision head...")
 
     initialize_decision_head(model)
 
     # =========================================================================
-    # FREEZE BACKBONE
+    # Freeze 60%
     # =========================================================================
 
-    print("\n5. Freezing backbone...")
-
     freeze_backbone(model)
+
+    # =========================================================================
+    # Parameter summary
+    # =========================================================================
 
     print_parameter_summary(model)
 
     # =========================================================================
-    # ONE SAMPLE
+    # 6. Build one sample
     # =========================================================================
 
-    print("\n6. Building one sample...")
+    print()
+    print("6. Building one sample...")
 
-    sample = build_sample(
-        tokenizer
-    )
-
-    print(
-        f"Question tokens : "
-        f"{sample['question_input_ids'].shape[0]}"
-    )
-
-    print(
-        f"Answer tokens   : "
-        f"{sample['answer_input_ids'].shape[0]}"
-    )
-
-    print(
-        f"Initial labels  : "
-        f"{sample['labels'].shape[0]}"
-    )
+    sample = build_sample(tokenizer)
 
     # =========================================================================
-    # DATASET
+    # Dataset
     # =========================================================================
 
     dataset = Dataset.from_list(
         [sample]
     )
 
+    # -------------------------------------------------------------------------
+    # Explicitly use PyTorch format.
+    #
+    # Dataset normally returns Python lists for token sequences.
+    # with_format("torch") makes these columns torch.Tensor when accessed.
+    # -------------------------------------------------------------------------
+
+    dataset = dataset.with_format(
+        "torch",
+        columns=[
+            "question_input_ids",
+            "answer_input_ids",
+            "attention_mask",
+            "labels",
+        ],
+        output_all_columns=True,
+    )
+
     print(
-        f"Dataset size: "
-        f"{len(dataset)}"
+        f"Dataset size: {len(dataset)}"
     )
 
     # =========================================================================
-    # TRAINING ARGUMENTS
+    # Verify dataset format before Trainer
     # =========================================================================
 
-    print("\n7. Creating TrainingArguments...")
+    print()
+    print("Checking dataset sample types...")
+
+    dataset_sample = dataset[0]
+
+    print(
+        "question_input_ids :",
+        type(dataset_sample["question_input_ids"]),
+        tuple(dataset_sample["question_input_ids"].shape),
+    )
+
+    print(
+        "answer_input_ids   :",
+        type(dataset_sample["answer_input_ids"]),
+        tuple(dataset_sample["answer_input_ids"].shape),
+    )
+
+    print(
+        "attention_mask      :",
+        type(dataset_sample["attention_mask"]),
+        tuple(dataset_sample["attention_mask"].shape),
+    )
+
+    print(
+        "labels              :",
+        type(dataset_sample["labels"]),
+        tuple(dataset_sample["labels"].shape),
+    )
+
+    # =========================================================================
+    # 7. TrainingArguments
+    # =========================================================================
+
+    print()
+    print("7. Creating TrainingArguments...")
 
     bf16_enabled = (
         device.type == "cuda"
         and torch.cuda.is_bf16_supported()
     )
 
+    print(
+        f"BF16 enabled: {bf16_enabled}"
+    )
+
     training_args = TrainingArguments(
+        # ---------------------------------------------------------------------
+        # Output
+        # ---------------------------------------------------------------------
 
         output_dir=OUTPUT_DIR,
 
@@ -684,7 +880,7 @@ def main():
         gradient_accumulation_steps=1,
 
         # ---------------------------------------------------------------------
-        # One optimizer step
+        # One-step test
         # ---------------------------------------------------------------------
 
         max_steps=MAX_STEPS,
@@ -712,21 +908,16 @@ def main():
         fp16=False,
 
         # ---------------------------------------------------------------------
-        # HF gradient checkpointing
+        # IMPORTANT:
+        # Use Hugging Face Trainer's native gradient checkpointing.
         #
-        # No custom checkpoint code is used.
+        # No custom checkpoint code is added to the model forward.
         # ---------------------------------------------------------------------
 
         gradient_checkpointing=True,
 
         # ---------------------------------------------------------------------
-        # Important because our model has custom inputs:
-        #
-        # question
-        # question_input_ids
-        # answer_input_ids
-        # attention_mask
-        # labels
+        # Custom ART forward arguments
         # ---------------------------------------------------------------------
 
         remove_unused_columns=False,
@@ -742,21 +933,25 @@ def main():
         logging_first_step=True,
 
         # ---------------------------------------------------------------------
-        # No evaluation / saving
+        # No evaluation
         # ---------------------------------------------------------------------
 
         eval_strategy="no",
 
+        # ---------------------------------------------------------------------
+        # No checkpoint saving
+        # ---------------------------------------------------------------------
+
         save_strategy="no",
 
         # ---------------------------------------------------------------------
-        # No external reporting
+        # Disable reporting integrations
         # ---------------------------------------------------------------------
 
         report_to="none",
 
         # ---------------------------------------------------------------------
-        # Dataloader
+        # DataLoader
         # ---------------------------------------------------------------------
 
         dataloader_num_workers=0,
@@ -779,203 +974,182 @@ def main():
     )
 
     # =========================================================================
-    # TRAINER
+    # 8. Trainer
     # =========================================================================
 
-    print("\n8. Creating Trainer...")
+    print()
+    print("8. Creating Trainer...")
+
+    data_collator = ARTDataCollator()
 
     trainer = Trainer(
         model=model,
         args=training_args,
         train_dataset=dataset,
-        data_collator=ARTDataCollator(),
+        data_collator=data_collator,
+    )
+
+    print(
+        "Trainer created successfully."
     )
 
     # =========================================================================
-    # INITIAL DECISION SCORE
+    # 9. Initial decision head
     # =========================================================================
 
-    print("\n9. Checking initial decision head...")
+    print()
+    print("9. Checking initial decision head...")
 
-    with torch.no_grad():
-
-        weight = (
-            model.retrieval_decision_head
-            .projection
-            .weight
-        )
-
-        bias = (
-            model.retrieval_decision_head
-            .projection
-            .bias
-        )
-
-        print(
-            f"Weight mean: "
-            f"{weight.float().mean().item():+.6e}"
-        )
-
-        print(
-            f"Weight abs mean: "
-            f"{weight.float().abs().mean().item():.6e}"
-        )
-
-        print(
-            f"Bias: "
-            f"{bias.float().tolist()}"
-        )
-
-        print(
-            f"Decision score: "
-            f"{torch.sigmoid(bias).float().tolist()}"
-        )
+    inspect_decision_head(
+        model,
+        "INITIAL DECISION HEAD",
+    )
 
     # =========================================================================
-    # TRAIN
+    # GPU memory before training
     # =========================================================================
 
-    print("\n" + "=" * 80)
+    print_gpu_memory(
+        "GPU MEMORY BEFORE TRAINING"
+    )
+
+    # =========================================================================
+    # 10. TRAIN
+    # =========================================================================
+
+    print()
+    print("=" * 80)
     print("10. START TRAINING")
     print("=" * 80)
 
     train_result = trainer.train()
 
     # =========================================================================
-    # TRAINING RESULT
+    # Training result
     # =========================================================================
 
-    print("\n" + "=" * 80)
+    print()
+    print("=" * 80)
     print("TRAINING RESULT")
     print("=" * 80)
+
+    print(
+        f"Global step: "
+        f"{train_result.global_step}"
+    )
 
     print(
         f"Training loss: "
         f"{train_result.training_loss}"
     )
 
-    print(
-        f"Global step: "
-        f"{trainer.state.global_step}"
-    )
-
-    # =========================================================================
-    # RETRIEVAL
-    # =========================================================================
-
-    print("\n" + "=" * 80)
-    print("ART RETRIEVAL STATE")
-    print("=" * 80)
-
-    print(
-        f"Retrieval count: "
-        f"{model.retrieval_count}"
-    )
-
-    print(
-        f"Max retrievals: "
-        f"{model.max_retrievals}"
-    )
-
-    print(
-        f"isTraining: "
-        f"{model.isTraining}"
-    )
-
     print("=" * 80)
 
     # =========================================================================
-    # GRADIENTS
+    # Gradient inspection
     # =========================================================================
 
     inspect_gradients(model)
 
     # =========================================================================
-    # FINAL DECISION HEAD
+    # Final decision head
     # =========================================================================
 
-    print("\n" + "=" * 80)
-    print("FINAL DECISION HEAD")
+    inspect_decision_head(
+        model,
+        "FINAL DECISION HEAD",
+    )
+
+    # =========================================================================
+    # ART state
+    # =========================================================================
+
+    print()
+    print("=" * 80)
+    print("ART TRAINING STATE")
     print("=" * 80)
 
-    with torch.no_grad():
+    print(
+        f"isTraining       : "
+        f"{model.isTraining}"
+    )
 
-        weight = (
-            model.retrieval_decision_head
-            .projection
-            .weight
-        )
+    print(
+        f"retrieval_count  : "
+        f"{model.retrieval_count}"
+    )
 
-        bias = (
-            model.retrieval_decision_head
-            .projection
-            .bias
-        )
+    if hasattr(model, "retrieval_scores"):
 
-        print(
-            f"Weight mean: "
-            f"{weight.float().mean().item():+.6e}"
-        )
-
-        print(
-            f"Weight abs mean: "
-            f"{weight.float().abs().mean().item():.6e}"
+        retrieval_scores = getattr(
+            model,
+            "retrieval_scores",
+            [],
         )
 
         print(
-            f"Bias: "
-            f"{bias.float().tolist()}"
+            f"retrieval_scores : "
+            f"{len(retrieval_scores)}"
         )
 
-        print(
-            f"Decision score from bias: "
-            f"{torch.sigmoid(bias).float().tolist()}"
-        )
+        for idx, score in enumerate(
+            retrieval_scores
+        ):
 
-    # =========================================================================
-    # GPU MEMORY
-    # =========================================================================
+            if isinstance(score, torch.Tensor):
 
-    if device.type == "cuda":
+                score_value = (
+                    score.detach()
+                    .float()
+                    .cpu()
+                    .item()
+                )
 
-        print("\n" + "=" * 80)
-        print("GPU MEMORY")
-        print("=" * 80)
+                print(
+                    f"  [{idx}] "
+                    f"{score_value:.6f}"
+                )
 
-        allocated = (
-            torch.cuda.memory_allocated()
-            / 1024**3
-        )
-
-        reserved = (
-            torch.cuda.memory_reserved()
-            / 1024**3
-        )
-
-        peak = (
-            torch.cuda.max_memory_allocated()
-            / 1024**3
-        )
-
-        print(
-            f"Allocated : "
-            f"{allocated:.2f} GB"
-        )
-
-        print(
-            f"Reserved  : "
-            f"{reserved:.2f} GB"
-        )
-
-        print(
-            f"Peak      : "
-            f"{peak:.2f} GB"
-        )
-
-    print("\n" + "=" * 80)
-    print("TEST FINISHED")
     print("=" * 80)
 
+    # =========================================================================
+    # GPU memory after training
+    # =========================================================================
+
+    print_gpu_memory(
+        "GPU MEMORY AFTER TRAINING"
+    )
+
+    # =========================================================================
+    # Cleanup
+    # =========================================================================
+
+    print()
+    print("Cleaning up...")
+
+    del trainer
+    del dataset
+    del model
+
+    gc.collect()
+
+    if torch.cuda.is_available():
+
+        torch.cuda.synchronize()
+
+        torch.cuda.empty_cache()
+
+        try:
+            torch.cuda.ipc_collect()
+        except Exception:
+            pass
+
+    print("Done.")
+
+
+# =============================================================================
+# ENTRY POINT
+# =============================================================================
 
 if __name__ == "__main__":
     main()
