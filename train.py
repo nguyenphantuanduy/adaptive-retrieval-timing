@@ -11,13 +11,6 @@ from transformers import (
     AutoModelForCausalLM,
 )
 
-# Import ART model
-# ------------------------------------------------------------
-# Sửa path này nếu model class của bạn nằm ở file/module khác.
-# ------------------------------------------------------------
-
-# Import custom Trainer
-# ------------------------------------------------------------
 from trainer import ARTTrainer
 
 
@@ -59,8 +52,7 @@ SAVE_STEPS = 500
 
 BF16 = True
 
-# IMPORTANT:
-# ART currently relies on KV cache during training.
+# ART training currently relies on KV cache.
 GRADIENT_CHECKPOINTING = False
 
 
@@ -143,7 +135,7 @@ def load_teacher_generated_training() -> Dict[str, Any]:
 def build_combined_dataset():
     """
     Combine the 2-hop, 3-hop and 4-hop training splits,
-    then shuffle deterministically using seed 42.
+    then shuffle deterministically.
     """
 
     datasets = load_teacher_generated_training()
@@ -189,31 +181,38 @@ def tokenize_training_sample(
     tokenizer,
 ) -> Dict[str, Any]:
     """
-    Convert one teacher-generated sample into
-    ART training inputs.
+    Convert one teacher-generated sample into ART training inputs.
 
-    Input
-    -----
-    sample["question"]
-        Original question.
+    Pipeline:
 
-    sample["teacher_generation_output"]
-        Teacher-generated reasoning + answer.
+        messages
+            ↓
+        apply_chat_template(tokenize=False)
+            ↓
+        question text
+            ↓
+        tokenizer(...)
+            ↓
+        question_input_ids
 
-    Output
-    ------
-    question_input_ids
-        Chat-templated system + user prompt.
+        teacher_generation_output + EOS
+            ↓
+        tokenizer(...)
+            ↓
+        answer_input_ids
 
-    answer_input_ids
-        Teacher generation followed by EOS.
+        attention_mask =
+            question_attention_mask
+            +
+            answer_attention_mask
 
-    attention_mask
-        Mask for the question tokens.
+        labels =
+            [-100] * question_length
+            +
+            answer_input_ids
 
-    labels
-        Question positions = -100.
-        Answer positions = answer token IDs.
+    The original question is preserved because ART's
+    forward_training() uses it for retrieval.
     """
 
     question = sample["question"]
@@ -222,9 +221,9 @@ def tokenize_training_sample(
         sample["teacher_generation_output"]
     )
 
-    # --------------------------------------------------------
-    # QUESTION CHAT TEMPLATE
-    # --------------------------------------------------------
+    # ========================================================
+    # 1. BUILD CHAT-TEMPLATED QUESTION STRING
+    # ========================================================
 
     messages = [
         {
@@ -237,30 +236,72 @@ def tokenize_training_sample(
         },
     ]
 
-    question_input_ids = tokenizer.apply_chat_template(
+    # --------------------------------------------------------
+    # IMPORTANT:
+    #
+    # First create the normal chat-template string.
+    # Do NOT tokenize inside apply_chat_template().
+    # --------------------------------------------------------
+
+    question_text = tokenizer.apply_chat_template(
         messages,
-        tokenize=True,
+        tokenize=False,
         add_generation_prompt=True,
+    )
+
+    # ========================================================
+    # 2. TOKENIZE QUESTION
+    # ========================================================
+
+    question_tokenized = tokenizer(
+        question_text,
+        add_special_tokens=False,
         return_tensors=None,
     )
 
-    # --------------------------------------------------------
-    # TEACHER ANSWER + EOS
-    # --------------------------------------------------------
+    question_input_ids = (
+        question_tokenized["input_ids"]
+    )
+
+    # ========================================================
+    # 3. TEACHER ANSWER + EOS
+    # ========================================================
 
     answer_text = (
         teacher_generation_output
         + tokenizer.eos_token
     )
 
-    answer_input_ids = tokenizer(
+    answer_tokenized = tokenizer(
         answer_text,
         add_special_tokens=False,
         return_tensors=None,
-    )["input_ids"]
+    )
+
+    answer_input_ids = (
+        answer_tokenized["input_ids"]
+    )
+
+    # ========================================================
+    # 4. ATTENTION MASK
+    # ========================================================
 
     # --------------------------------------------------------
-    # QUESTION ATTENTION MASK
+    # Question:
+    #
+    # [1, 1, 1, ..., 1]
+    #
+    # Answer:
+    #
+    # [1, 1, 1, ..., 1]
+    #
+    # Final:
+    #
+    # [question mask] + [answer mask]
+    #
+    # This therefore covers the complete initial sequence:
+    #
+    # question + answer
     # --------------------------------------------------------
 
     question_attention_mask = [
@@ -268,10 +309,24 @@ def tokenize_training_sample(
         for _ in question_input_ids
     ]
 
+    answer_attention_mask = [
+        1
+        for _ in answer_input_ids
+    ]
+
+    attention_mask = (
+        question_attention_mask
+        + answer_attention_mask
+    )
+
+    # ========================================================
+    # 5. LABELS
+    # ========================================================
+
     # --------------------------------------------------------
-    # LABELS
-    #
     # Question tokens do not contribute to LM loss.
+    #
+    # Answer tokens do contribute.
     # --------------------------------------------------------
 
     labels = (
@@ -279,10 +334,40 @@ def tokenize_training_sample(
         + answer_input_ids
     )
 
+    # ========================================================
+    # 6. SANITY CHECKS
+    # ========================================================
+
+    if len(attention_mask) != len(labels):
+
+        raise ValueError(
+            "attention_mask and labels length mismatch: "
+            f"attention_mask={len(attention_mask)}, "
+            f"labels={len(labels)}"
+        )
+
+    if len(question_input_ids) + len(answer_input_ids) != len(labels):
+
+        raise ValueError(
+            "Question + answer length does not match labels."
+        )
+
+    # ========================================================
+    # 7. RETURN
+    # ========================================================
+
     return {
+        # Original question is needed by ART retrieval.
+        "question": question,
+
         "question_input_ids": question_input_ids,
+
         "answer_input_ids": answer_input_ids,
-        "attention_mask": question_attention_mask,
+
+        # IMPORTANT:
+        # Full question + answer attention mask.
+        "attention_mask": attention_mask,
+
         "labels": labels,
     }
 
@@ -324,18 +409,17 @@ class ARTDataCollator:
     """
     Collator for ART training.
 
-    Each sample is processed independently by
-    AttentionMixingProbeForCausalLM.forward_training().
-
-    We intentionally keep batch size = 1.
+    Current ART implementation operates one sample at a time,
+    therefore batch_size must be 1.
     """
 
     def __call__(
         self,
         features: List[Dict[str, Any]],
-    ) -> Dict[str, torch.Tensor]:
+    ) -> Dict[str, Any]:
 
         if len(features) != 1:
+
             raise ValueError(
                 "ARTDataCollator expects "
                 "per_device_train_batch_size=1."
@@ -343,70 +427,218 @@ class ARTDataCollator:
 
         feature = features[0]
 
+        # ----------------------------------------------------
+        # Convert sequence fields to tensors.
+        # ----------------------------------------------------
+
+        question_input_ids = torch.as_tensor(
+            feature["question_input_ids"],
+            dtype=torch.long,
+        )
+
+        answer_input_ids = torch.as_tensor(
+            feature["answer_input_ids"],
+            dtype=torch.long,
+        )
+
+        attention_mask = torch.as_tensor(
+            feature["attention_mask"],
+            dtype=torch.long,
+        )
+
+        labels = torch.as_tensor(
+            feature["labels"],
+            dtype=torch.long,
+        )
+
+        # ----------------------------------------------------
+        # Sanity checks
+        # ----------------------------------------------------
+
+        expected_length = (
+            question_input_ids.shape[0]
+            + answer_input_ids.shape[0]
+        )
+
+        if attention_mask.shape[0] != expected_length:
+
+            raise ValueError(
+                "Attention mask length mismatch: "
+                f"expected={expected_length}, "
+                f"actual={attention_mask.shape[0]}"
+            )
+
+        if labels.shape[0] != expected_length:
+
+            raise ValueError(
+                "Labels length mismatch: "
+                f"expected={expected_length}, "
+                f"actual={labels.shape[0]}"
+            )
+
+        # ----------------------------------------------------
+        # Add batch dimension.
+        # ----------------------------------------------------
+
         return {
-            "question_input_ids": torch.tensor(
-                feature["question_input_ids"],
-                dtype=torch.long,
-            ).unsqueeze(0),
+            "question": feature["question"],
 
-            "answer_input_ids": torch.tensor(
-                feature["answer_input_ids"],
-                dtype=torch.long,
-            ).unsqueeze(0),
+            "question_input_ids": (
+                question_input_ids.unsqueeze(0)
+            ),
 
-            "attention_mask": torch.tensor(
-                feature["attention_mask"],
-                dtype=torch.long,
-            ).unsqueeze(0),
+            "answer_input_ids": (
+                answer_input_ids.unsqueeze(0)
+            ),
 
-            "labels": torch.tensor(
-                feature["labels"],
-                dtype=torch.long,
-            ).unsqueeze(0),
+            "attention_mask": (
+                attention_mask.unsqueeze(0)
+            ),
+
+            "labels": (
+                labels.unsqueeze(0)
+            ),
         }
 
 
 # ============================================================
-# INITIALIZE DECISION HEAD
+# VERIFY DECISION HEAD
 # ============================================================
 
-def initialize_decision_head(model) -> None:
+def verify_decision_head(model) -> None:
     """
-    Initialize retrieval decision head so that the initial
-    decision score is approximately sigmoid(0.1) = 0.525.
+    Verify that the loaded model's retrieval decision head
+    starts with:
+
+        weight = 0
+        bias   = 0
+
+    which gives:
+
+        sigmoid(0) = 0.5
     """
 
     print()
     print("=" * 80)
-    print("INITIALIZING RETRIEVAL DECISION HEAD")
+    print("VERIFYING RETRIEVAL DECISION HEAD")
     print("=" * 80)
 
-    with torch.no_grad():
+    weight = (
+        model.retrieval_decision_head
+        .projection
+        .weight
+    )
 
-        model.retrieval_decision_head.projection.weight.zero_()
+    bias = (
+        model.retrieval_decision_head
+        .projection
+        .bias
+    )
 
-        model.retrieval_decision_head.projection.bias.fill_(
-            0.1
-        )
+    weight_mean = (
+        weight.detach()
+        .float()
+        .mean()
+        .item()
+    )
+
+    weight_abs_mean = (
+        weight.detach()
+        .float()
+        .abs()
+        .mean()
+        .item()
+    )
+
+    bias_value = (
+        bias.detach()
+        .float()
+        .item()
+    )
 
     expected_score = torch.sigmoid(
-        torch.tensor(0.1)
+        torch.tensor(
+            bias_value,
+            dtype=torch.float32,
+        )
     ).item()
 
     print(
-        f"Weight initialized to : "
-        f"{model.retrieval_decision_head.projection.weight.mean().item():.6f}"
+        f"Weight mean     : "
+        f"{weight_mean:+.6e}"
     )
 
     print(
-        f"Bias initialized to   : "
-        f"{model.retrieval_decision_head.projection.bias.item():.6f}"
+        f"Weight abs mean : "
+        f"{weight_abs_mean:.6e}"
     )
 
     print(
-        f"Expected score        : "
-        f"{expected_score:.6f}"
+        f"Bias            : "
+        f"{bias_value:+.6e}"
     )
+
+    print(
+        f"Zero-hidden score: "
+        f"{expected_score:.8f}"
+    )
+
+    # --------------------------------------------------------
+    # Verify actual head using zero hidden state.
+    # --------------------------------------------------------
+
+    hidden_size = model.config.hidden_size
+
+    zero_hidden = torch.zeros(
+        1,
+        1,
+        hidden_size,
+        device=weight.device,
+        dtype=weight.dtype,
+    )
+
+    with torch.no_grad():
+
+        decision_score = (
+            model.retrieval_decision_head(
+                zero_hidden
+            )
+        )
+
+    actual_score = (
+        decision_score
+        .float()
+        .cpu()
+        .item()
+    )
+
+    print(
+        f"Actual score    : "
+        f"{actual_score:.8f}"
+    )
+
+    if (
+        abs(weight_mean) < 1e-7
+        and weight_abs_mean < 1e-7
+        and abs(bias_value) < 1e-7
+        and abs(actual_score - 0.5) < 1e-5
+    ):
+
+        print()
+        print(
+            "✓ Retrieval decision head is initialized "
+            "correctly at score ≈ 0.5."
+        )
+
+    else:
+
+        print()
+        print(
+            "⚠ WARNING: Retrieval decision head "
+            "is not initialized at zero."
+        )
+
+    print("=" * 80)
 
 
 # ============================================================
@@ -432,14 +664,14 @@ def freeze_backbone(model) -> None:
     print("=" * 80)
 
     # --------------------------------------------------------
-    # Freeze everything first
+    # Freeze everything first.
     # --------------------------------------------------------
 
     for parameter in model.parameters():
         parameter.requires_grad = False
 
     # --------------------------------------------------------
-    # Last decoder layer
+    # Last decoder layer.
     # --------------------------------------------------------
 
     last_layer = model.model.layers[-1]
@@ -448,25 +680,30 @@ def freeze_backbone(model) -> None:
         parameter.requires_grad = True
 
     # --------------------------------------------------------
-    # Retrieval decision head
+    # Retrieval decision head.
     # --------------------------------------------------------
 
-    for parameter in model.retrieval_decision_head.parameters():
+    for parameter in (
+        model.retrieval_decision_head.parameters()
+    ):
         parameter.requires_grad = True
 
     # --------------------------------------------------------
-    # Report
+    # Report.
     # --------------------------------------------------------
 
     num_layers = len(model.model.layers)
 
     print(
-        f"Total decoder layers : {num_layers}"
+        f"Total decoder layers : "
+        f"{num_layers}"
     )
 
     print()
 
-    for index, layer in enumerate(model.model.layers):
+    for index, layer in enumerate(
+        model.model.layers
+    ):
 
         trainable = any(
             parameter.requires_grad
@@ -500,6 +737,8 @@ def freeze_backbone(model) -> None:
         "Rotary embedding: FROZEN"
     )
 
+    print("=" * 80)
+
 
 # ============================================================
 # PARAMETER SUMMARY
@@ -508,6 +747,7 @@ def freeze_backbone(model) -> None:
 def print_parameter_summary(model) -> None:
 
     total_parameters = 0
+
     trainable_parameters = 0
 
     for parameter in model.parameters():
@@ -554,6 +794,8 @@ def print_parameter_summary(model) -> None:
         f"Trainable percentage : "
         f"{trainable_percentage:.4f}%"
     )
+
+    print("=" * 80)
 
 
 # ============================================================
@@ -604,6 +846,8 @@ def print_gpu_memory(
             f"peak={peak:.2f} GB"
         )
 
+    print("=" * 80)
+
 
 # ============================================================
 # MAIN
@@ -638,7 +882,9 @@ def main():
         else "cpu"
     )
 
-    print(f"Device: {device}")
+    print(
+        f"Device: {device}"
+    )
 
     if torch.cuda.is_available():
 
@@ -665,6 +911,7 @@ def main():
     )
 
     if tokenizer.eos_token is None:
+
         raise ValueError(
             "Tokenizer does not have an EOS token."
         )
@@ -722,22 +969,79 @@ def main():
 
     first_sample = train_dataset[0]
 
+    question_length = len(
+        first_sample["question_input_ids"]
+    )
+
+    answer_length = len(
+        first_sample["answer_input_ids"]
+    )
+
+    attention_length = len(
+        first_sample["attention_mask"]
+    )
+
+    label_length = len(
+        first_sample["labels"]
+    )
+
     print(
         f"Question tokens : "
-        f"{len(first_sample['question_input_ids'])}"
+        f"{question_length}"
     )
 
     print(
         f"Answer tokens   : "
-        f"{len(first_sample['answer_input_ids'])}"
+        f"{answer_length}"
+    )
+
+    print(
+        f"Attention mask  : "
+        f"{attention_length}"
     )
 
     print(
         f"Label tokens    : "
-        f"{len(first_sample['labels'])}"
+        f"{label_length}"
     )
 
     print()
+
+    expected_length = (
+        question_length
+        + answer_length
+    )
+
+    print(
+        f"Expected full sequence length: "
+        f"{expected_length}"
+    )
+
+    if attention_length != expected_length:
+
+        raise ValueError(
+            "Attention mask does not cover "
+            "question + answer."
+        )
+
+    if label_length != expected_length:
+
+        raise ValueError(
+            "Labels do not cover "
+            "question + answer."
+        )
+
+    print(
+        "✓ Attention mask = "
+        "question mask + answer mask"
+    )
+
+    print(
+        "✓ Labels = "
+        "[-100] question + answer IDs"
+    )
+
+    print("=" * 80)
 
     # ========================================================
     # 7. LOAD MODEL
@@ -746,13 +1050,11 @@ def main():
     print()
     print("6. Loading model...")
 
-    model = (
-        AutoModelForCausalLM
-        .from_pretrained(
-            MODEL_REPO,
-            torch_dtype=torch.bfloat16,
-            trust_remote_code=True,
-        )
+    model = AutoModelForCausalLM.from_pretrained(
+        MODEL_REPO,
+        torch_dtype=torch.bfloat16,
+        trust_remote_code=True,
+        attn_implementation="eager",
     )
 
     print(
@@ -769,12 +1071,26 @@ def main():
 
     model = model.to(device)
 
+    print(
+        f"Model device: "
+        f"{device}"
+    )
+
     # ========================================================
-    # 9. ART TRAINING MODE
+    # 9. VERIFY DECISION HEAD
     # ========================================================
 
     print()
-    print("Enabling ART training mode...")
+    print("8. Verifying decision head...")
+
+    verify_decision_head(model)
+
+    # ========================================================
+    # 10. ART TRAINING MODE
+    # ========================================================
+
+    print()
+    print("9. Enabling ART training mode...")
 
     model.enable_training_mode()
 
@@ -784,7 +1100,7 @@ def main():
     )
 
     # ========================================================
-    # 10. DISABLE GRADIENT CHECKPOINTING
+    # 11. DISABLE GRADIENT CHECKPOINTING
     # ========================================================
 
     print()
@@ -796,6 +1112,7 @@ def main():
         model,
         "gradient_checkpointing_disable",
     ):
+
         model.gradient_checkpointing_disable()
 
     model.config.use_cache = True
@@ -809,15 +1126,14 @@ def main():
         f"{model.config.use_cache}"
     )
 
-    # ========================================================
-    # 11. INITIALIZE DECISION HEAD
-    # ========================================================
-
-    initialize_decision_head(model)
+    print("=" * 80)
 
     # ========================================================
     # 12. FREEZE BACKBONE
     # ========================================================
+
+    print()
+    print("10. Freezing backbone...")
 
     freeze_backbone(model)
 
@@ -828,7 +1144,7 @@ def main():
     # ========================================================
 
     print()
-    print("8. Creating data collator...")
+    print("11. Creating data collator...")
 
     data_collator = ARTDataCollator()
 
@@ -841,16 +1157,36 @@ def main():
     # ========================================================
 
     print()
-    print("9. Creating TrainingArguments...")
+    print("12. Creating TrainingArguments...")
+
+    if BF16:
+
+        if not torch.cuda.is_available():
+
+            raise RuntimeError(
+                "BF16 training is enabled but CUDA "
+                "is not available."
+            )
+
+        if not torch.cuda.is_bf16_supported():
+
+            raise RuntimeError(
+                "BF16 training is enabled but "
+                "this GPU does not support BF16."
+            )
 
     training_args = TrainingArguments(
         output_dir=OUTPUT_DIR,
 
         # ----------------------------------------------------
-        # Dataset / epochs
+        # Epochs
         # ----------------------------------------------------
 
         num_train_epochs=NUM_TRAIN_EPOCHS,
+
+        # ----------------------------------------------------
+        # Batch
+        # ----------------------------------------------------
 
         per_device_train_batch_size=(
             PER_DEVICE_TRAIN_BATCH_SIZE
@@ -880,13 +1216,21 @@ def main():
 
         bf16=BF16,
 
+        fp16=False,
+
         # ----------------------------------------------------
-        # IMPORTANT FOR ART
+        # ART cache compatibility
         # ----------------------------------------------------
 
         gradient_checkpointing=(
             GRADIENT_CHECKPOINTING
         ),
+
+        # ----------------------------------------------------
+        # Custom ART forward arguments
+        # ----------------------------------------------------
+
+        remove_unused_columns=False,
 
         # ----------------------------------------------------
         # Logging
@@ -907,18 +1251,10 @@ def main():
         save_steps=SAVE_STEPS,
 
         # ----------------------------------------------------
-        # Reproducibility
+        # Evaluation
         # ----------------------------------------------------
 
-        seed=SEED,
-
-        data_seed=SEED,
-
-        # ----------------------------------------------------
-        # Dataset columns
-        # ----------------------------------------------------
-
-        remove_unused_columns=False,
+        eval_strategy="no",
 
         # ----------------------------------------------------
         # Reporting
@@ -932,11 +1268,15 @@ def main():
 
         dataloader_num_workers=0,
 
+        dataloader_pin_memory=False,
+
         # ----------------------------------------------------
-        # No evaluation
+        # Reproducibility
         # ----------------------------------------------------
 
-        eval_strategy="no",
+        seed=SEED,
+
+        data_seed=SEED,
     )
 
     print(
@@ -955,8 +1295,13 @@ def main():
     )
 
     print(
-        f"Effective batch size: "
+        "Effective batch size: "
         f"{PER_DEVICE_TRAIN_BATCH_SIZE * GRADIENT_ACCUMULATION_STEPS}"
+    )
+
+    print(
+        f"Learning rate: "
+        f"{LEARNING_RATE}"
     )
 
     print(
@@ -969,7 +1314,7 @@ def main():
     # ========================================================
 
     print()
-    print("10. Creating ART Trainer...")
+    print("13. Creating ART Trainer...")
 
     trainer = ARTTrainer(
         model=model,
@@ -981,11 +1326,7 @@ def main():
     # --------------------------------------------------------
     # IMPORTANT:
     #
-    # Tell HF Trainer that our model does NOT use
-    # num_items_in_batch.
-    #
-    # This also makes Trainer perform the normal
-    # gradient-accumulation scaling.
+    # ART forward() does not use num_items_in_batch.
     # --------------------------------------------------------
 
     trainer.model_accepts_loss_kwargs = False
@@ -1016,7 +1357,7 @@ def main():
 
     print()
     print("=" * 80)
-    print("11. START TRAINING")
+    print("14. START TRAINING")
     print("=" * 80)
 
     train_result = trainer.train()
@@ -1040,6 +1381,8 @@ def main():
         f"{train_result.training_loss}"
     )
 
+    print("=" * 80)
+
     # ========================================================
     # 19. MEMORY AFTER TRAINING
     # ========================================================
@@ -1051,7 +1394,106 @@ def main():
         )
 
     # ========================================================
-    # 20. SAVE FINAL MODEL
+    # 20. FINAL DECISION HEAD
+    # ========================================================
+
+    print()
+    print("15. Checking final decision head...")
+
+    weight = (
+        model.retrieval_decision_head
+        .projection
+        .weight
+    )
+
+    bias = (
+        model.retrieval_decision_head
+        .projection
+        .bias
+    )
+
+    print()
+    print("=" * 80)
+    print("FINAL RETRIEVAL DECISION HEAD")
+    print("=" * 80)
+
+    print(
+        f"Weight mean     : "
+        f"{weight.detach().float().mean().item():+.6e}"
+    )
+
+    print(
+        f"Weight abs mean : "
+        f"{weight.detach().float().abs().mean().item():.6e}"
+    )
+
+    print(
+        f"Bias            : "
+        f"{bias.detach().float().cpu().numpy()}"
+    )
+
+    print("=" * 80)
+
+    # ========================================================
+    # 21. ART STATE
+    # ========================================================
+
+    print()
+    print("=" * 80)
+    print("ART TRAINING STATE")
+    print("=" * 80)
+
+    print(
+        f"isTraining      : "
+        f"{model.isTraining}"
+    )
+
+    print(
+        f"retrieval_count : "
+        f"{model.retrieval_count}"
+    )
+
+    if hasattr(
+        model,
+        "retrieval_scores",
+    ):
+
+        retrieval_scores = getattr(
+            model,
+            "retrieval_scores",
+            [],
+        )
+
+        print(
+            f"retrieval_scores: "
+            f"{len(retrieval_scores)}"
+        )
+
+        for index, score in enumerate(
+            retrieval_scores
+        ):
+
+            if isinstance(
+                score,
+                torch.Tensor,
+            ):
+
+                score_value = (
+                    score.detach()
+                    .float()
+                    .cpu()
+                    .item()
+                )
+
+                print(
+                    f"  [{index}] "
+                    f"{score_value:.6f}"
+                )
+
+    print("=" * 80)
+
+    # ========================================================
+    # 22. SAVE FINAL MODEL
     # ========================================================
 
     print()
@@ -1071,6 +1513,33 @@ def main():
         f"Saved to: "
         f"{OUTPUT_DIR}"
     )
+
+    print("=" * 80)
+
+    # ========================================================
+    # 23. CLEANUP
+    # ========================================================
+
+    print()
+    print("Cleaning up...")
+
+    del trainer
+    del train_dataset
+    del raw_dataset
+    del model
+
+    gc.collect()
+
+    if torch.cuda.is_available():
+
+        torch.cuda.synchronize()
+
+        torch.cuda.empty_cache()
+
+        try:
+            torch.cuda.ipc_collect()
+        except Exception:
+            pass
 
     print()
     print("=" * 80)
