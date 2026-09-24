@@ -48,23 +48,22 @@ def main() -> None:
 
     if device.type == "cuda":
         print(f"GPU: {torch.cuda.get_device_name(0)}")
+        print(
+            f"CUDA: {torch.version.cuda}"
+        )
 
     # =========================================================================
     # 2. Load tokenizer
     # =========================================================================
 
-    print(
-        "\n1. Loading tokenizer..."
-    )
+    print("\n1. Loading tokenizer...")
 
     tokenizer = AutoTokenizer.from_pretrained(
         TOKENIZER_REPO,
         trust_remote_code=True,
     )
 
-    print(
-        f"   Tokenizer: {TOKENIZER_REPO}"
-    )
+    print(f"   Tokenizer: {TOKENIZER_REPO}")
 
     # =========================================================================
     # 3. Build chat
@@ -81,12 +80,12 @@ def main() -> None:
         },
     ]
 
-    # Use the model's official chat template.
+    # Use Qwen's official chat template.
     #
-    # tokenize=True avoids accidentally adding duplicated special tokens.
-    # add_generation_prompt=True adds the assistant-generation prefix.
-    #
-    # Hugging Face recommends this pattern for chat-model generation.
+    # The question appears in the user message.
+    # The same question is also passed separately to ART later as
+    # `question=QUESTION` so that the retrieval module knows the
+    # original question.
     inputs = tokenizer.apply_chat_template(
         messages,
         tokenize=True,
@@ -94,8 +93,8 @@ def main() -> None:
         return_tensors="pt",
     )
 
-    # Some Transformers versions return a tensor directly,
-    # while return_dict=True returns a BatchEncoding.
+    # Depending on the Transformers version, apply_chat_template()
+    # can return either a Tensor or a BatchEncoding-like object.
     if isinstance(inputs, torch.Tensor):
 
         input_ids = inputs
@@ -117,10 +116,7 @@ def main() -> None:
     # 4. Print formatted prompt
     # =========================================================================
 
-    print(
-        "\n2. Formatted chat prompt:"
-    )
-
+    print("\n2. Formatted chat prompt:")
     print("-" * 80)
 
     formatted_prompt = tokenizer.decode(
@@ -140,13 +136,25 @@ def main() -> None:
     # 5. Load ART model
     # =========================================================================
 
+    print("\n3. Loading ART demo model...")
+
     print(
-        "\n3. Loading ART demo model..."
+        "   NOTE: low_cpu_mem_usage=False is used because "
+        "ART initializes the MuSiQue/E5 retriever inside __init__()."
     )
 
     model = AutoModelForCausalLM.from_pretrained(
         MODEL_REPO,
         trust_remote_code=True,
+
+        # IMPORTANT:
+        # Prevent Transformers from creating the ART model on meta device.
+        #
+        # This is necessary because the current ART model constructor
+        # initializes MuSiQueRetrievalDB(), which itself calls
+        # AutoModel.from_pretrained() for E5.
+        low_cpu_mem_usage=False,
+
         dtype=DTYPE,
         attn_implementation="eager",
     )
@@ -163,7 +171,7 @@ def main() -> None:
     )
 
     print(
-        f"   Model dtype: "
+        "   Model dtype: "
         f"{model.model.embed_tokens.weight.dtype}"
     )
 
@@ -171,12 +179,18 @@ def main() -> None:
     # 6. Generation
     # =========================================================================
 
-    print(
-        "\n4. Generating..."
-    )
+    print("\n4. Generating...")
 
     print(
         f"   Question: {QUESTION}"
+    )
+
+    print(
+        f"   Max new tokens: 256"
+    )
+
+    print(
+        f"   Sampling: disabled (greedy decoding)"
     )
 
     print()
@@ -189,11 +203,14 @@ def main() -> None:
 
             # -----------------------------------------------------------------
             # ART-specific input
-            #
-            # The question is already present inside the user prompt.
-            # This separate argument is used by ART for retrieval.
             # -----------------------------------------------------------------
-
+            #
+            # The question is already included in the user message above.
+            #
+            # This separate argument is NOT added to the prompt.
+            # It is passed to ART so the retrieval module knows the
+            # original question.
+            #
             question=QUESTION,
 
             # -----------------------------------------------------------------
@@ -245,6 +262,30 @@ def main() -> None:
     print(
         f"Total tokens: {outputs.shape[1]}"
     )
+
+    # =========================================================================
+    # 9. ART state
+    # =========================================================================
+
+    print("\nART STATE")
+    print("-" * 80)
+
+    if hasattr(model, "retrieval_count"):
+        print(
+            f"Retrieval count: {model.retrieval_count}"
+        )
+
+    if hasattr(model, "max_retrievals"):
+        print(
+            f"Max retrievals: {model.max_retrievals}"
+        )
+
+    if hasattr(model, "isTraining"):
+        print(
+            f"isTraining: {model.isTraining}"
+        )
+
+    print("-" * 80)
 
 
 if __name__ == "__main__":
