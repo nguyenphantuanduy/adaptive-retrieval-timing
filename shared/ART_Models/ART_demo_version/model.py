@@ -1,6 +1,6 @@
 import torch
 from torch import nn
-
+from transformers import AutoTokenizer
 from transformers.cache_utils import Cache, DynamicCache
 from transformers.generation import GenerationMixin
 from transformers.modeling_outputs import (
@@ -318,6 +318,7 @@ class AttentionMixingProbeForCausalLM(
         self.retrieval_count = 0
 
         self.retriever = None
+        self.tokenizer = None
 
         # Initialize weights and apply final processing
         self.post_init()
@@ -334,6 +335,14 @@ class AttentionMixingProbeForCausalLM(
                 top_k=3,
             )
         return self.retriever
+
+    def _get_tokenizer(self):
+        if self.tokenizer is None:
+            self.tokenizer = AutoTokenizer.from_pretrained(
+                "Qwen/Qwen2.5-3B-Instruct",
+                trust_remote_code=True,
+            )
+        return self.tokenizer
 
     # =========================================================================
     # Forward dispatcher
@@ -564,7 +573,7 @@ class AttentionMixingProbeForCausalLM(
             # 7.2 Tokenize retrieved document
             # -----------------------------------------------------------------
 
-            document_inputs = past_key_values.tokenizer(
+            document_inputs = self._get_tokenizer()(
                 retrieval_text,
                 return_tensors="pt",
                 truncation=True,
@@ -803,7 +812,7 @@ class AttentionMixingProbeForCausalLM(
                 # -------------------------------------------------------------
 
                 document_inputs = (
-                    past_key_values.tokenizer(
+                    self._get_tokenizer()(
                         retrieval_text,
                         return_tensors="pt",
                         truncation=True,
@@ -1253,7 +1262,7 @@ class AttentionMixingProbeForCausalLM(
                 # 6.2.3 Tokenize retrieved document
                 # -------------------------------------------------------------
 
-                document_inputs = past_key_values.tokenizer(
+                document_inputs = self._get_tokenizer()(
                     retrieval_text,
                     return_tensors="pt",
                     truncation=True,
