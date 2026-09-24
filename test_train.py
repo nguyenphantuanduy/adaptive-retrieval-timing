@@ -33,6 +33,9 @@ LEARNING_RATE = 1e-5
 
 MAX_STEPS = 1
 
+# Freeze first 60% of Qwen decoder layers.
+FREEZE_RATIO = 0.60
+
 
 # =============================================================================
 # ONE TEST SAMPLE
@@ -76,7 +79,6 @@ def initialize_decision_head(model):
     print("=" * 80)
 
     with torch.no_grad():
-
         model.retrieval_decision_head.projection.weight.zero_()
 
         model.retrieval_decision_head.projection.bias.fill_(0.1)
@@ -88,10 +90,9 @@ def initialize_decision_head(model):
         )
     ).item()
 
-    print("Weight initialized to : 0")
-    print("Bias initialized to   : 0.1")
+    print(f"Weight initialized to : 0")
+    print(f"Bias initialized to   : 0.1")
     print(f"Expected score        : {expected_score:.6f}")
-
     print("=" * 80)
 
 
@@ -101,30 +102,19 @@ def initialize_decision_head(model):
 
 def freeze_backbone(model):
     """
-    Train ONLY:
-
-        1. Last decoder layer
-        2. Retrieval decision head
-        3. LM head / vocabulary projection
-
-    Freeze:
-
-        - All earlier decoder layers
-        - Token embedding
-        - Rotary embedding
-        - Final norm
+    Freeze first FREEZE_RATIO of decoder layers.
 
     For Qwen2.5-3B:
+        36 layers
+        60% -> 21 frozen layers
+        15 trainable decoder layers
 
-        36 decoder layers
-
-        Frozen:
-            layers 0 ... 34
-
-        Trainable:
-            layer 35
-            retrieval decision head
-            lm_head
+    Additionally:
+        - embedding: frozen
+        - rotary embedding: frozen
+        - lm_head: frozen
+        - final norm: trainable
+        - retrieval decision head: trainable
     """
 
     print()
@@ -136,10 +126,12 @@ def freeze_backbone(model):
 
     num_layers = len(layers)
 
-    last_layer_idx = num_layers - 1
+    num_frozen_layers = int(num_layers * FREEZE_RATIO)
 
     print(f"Total decoder layers : {num_layers}")
-    print(f"Trainable layer      : {last_layer_idx}")
+    print(f"Freeze ratio          : {FREEZE_RATIO:.2f}")
+    print(f"Frozen layers         : {num_frozen_layers}")
+    print(f"Trainable layers      : {num_layers - num_frozen_layers}")
     print()
 
     # -------------------------------------------------------------------------
@@ -157,16 +149,12 @@ def freeze_backbone(model):
 
     for layer_idx, layer in enumerate(layers):
 
-        is_trainable = layer_idx == last_layer_idx
+        frozen = layer_idx < num_frozen_layers
 
         for param in layer.parameters():
-            param.requires_grad = is_trainable
+            param.requires_grad = not frozen
 
-        status = (
-            "TRAINABLE"
-            if is_trainable
-            else "FROZEN"
-        )
+        status = "FROZEN" if frozen else "TRAINABLE"
 
         print(
             f"Layer {layer_idx:02d}: {status}"
@@ -177,10 +165,10 @@ def freeze_backbone(model):
     # -------------------------------------------------------------------------
 
     for param in model.model.norm.parameters():
-        param.requires_grad = False
+        param.requires_grad = True
 
     print()
-    print("Final norm: FROZEN")
+    print("Final norm: TRAINABLE")
 
     # -------------------------------------------------------------------------
     # Rotary embedding
@@ -192,13 +180,13 @@ def freeze_backbone(model):
     print("Rotary embedding: FROZEN")
 
     # -------------------------------------------------------------------------
-    # LM head / vocabulary projection
+    # LM head
     # -------------------------------------------------------------------------
 
     for param in model.lm_head.parameters():
-        param.requires_grad = True
+        param.requires_grad = False
 
-    print("LM head / vocabulary projection: TRAINABLE")
+    print("LM head: FROZEN")
 
     # -------------------------------------------------------------------------
     # Retrieval decision head
@@ -297,6 +285,7 @@ def build_sample(tokenizer):
     else:
         question_input_ids = question["input_ids"]
 
+    # Remove batch dimension.
     question_input_ids = question_input_ids[0]
 
     # -------------------------------------------------------------------------
@@ -322,6 +311,13 @@ def build_sample(tokenizer):
 
     # -------------------------------------------------------------------------
     # Initial labels
+    #
+    # At this stage:
+    #
+    # [question tokens] + [answer tokens]
+    #
+    # forward_training() will later modify labels when retrieval documents
+    # are inserted.
     # -------------------------------------------------------------------------
 
     labels = torch.cat(
@@ -364,6 +360,15 @@ def build_sample(tokenizer):
 # =============================================================================
 
 class ARTDataCollator:
+    """
+    Batch exactly one ART sample.
+
+    This test intentionally uses batch_size=1 because the current
+    forward_training() logic is designed around one sample / one question.
+
+    The collator explicitly converts the sequence fields to torch.Tensor,
+    so it works whether Dataset returns Python lists or tensors.
+    """
 
     def __call__(self, features):
 
@@ -373,6 +378,10 @@ class ARTDataCollator:
             )
 
         sample = features[0]
+
+        # ---------------------------------------------------------------------
+        # Convert to tensors robustly.
+        # ---------------------------------------------------------------------
 
         question_input_ids = torch.as_tensor(
             sample["question_input_ids"],
@@ -393,6 +402,10 @@ class ARTDataCollator:
             sample["labels"],
             dtype=torch.long,
         )
+
+        # ---------------------------------------------------------------------
+        # Add batch dimension.
+        # ---------------------------------------------------------------------
 
         return {
             "question": sample["question"],
@@ -464,36 +477,57 @@ def inspect_gradients(model):
         )
 
     # -------------------------------------------------------------------------
-    # Last decoder layer
+    # First frozen layer
     # -------------------------------------------------------------------------
 
     layers = model.model.layers
 
-    last_layer_idx = len(layers) - 1
+    frozen_layer = layers[0]
 
-    last_layer = layers[last_layer_idx]
-
-    last_layer_grads = [
+    frozen_grads = [
         param.grad
-        for param in last_layer.parameters()
+        for param in frozen_layer.parameters()
+        if param.grad is not None
+    ]
+
+    print()
+    print("Layer 00 (FROZEN):")
+
+    if len(frozen_grads) == 0:
+        print("  Gradient: NONE ✓")
+    else:
+        print(
+            f"  Gradient tensors found: {len(frozen_grads)}"
+        )
+
+    # -------------------------------------------------------------------------
+    # First trainable layer
+    # -------------------------------------------------------------------------
+
+    trainable_layer_idx = int(
+        len(layers) * FREEZE_RATIO
+    )
+
+    trainable_layer = layers[trainable_layer_idx]
+
+    trainable_grads = [
+        param.grad
+        for param in trainable_layer.parameters()
         if param.grad is not None
     ]
 
     print()
     print(
-        f"Layer {last_layer_idx:02d} (TRAINABLE):"
+        f"Layer {trainable_layer_idx:02d} (TRAINABLE):"
     )
 
-    if len(last_layer_grads) == 0:
-
+    if len(trainable_grads) == 0:
         print("  Gradient: NONE")
-
     else:
 
         total_grad_norm = 0.0
 
-        for grad in last_layer_grads:
-
+        for grad in trainable_grads:
             total_grad_norm += (
                 grad.detach()
                 .float()
@@ -504,80 +538,11 @@ def inspect_gradients(model):
         total_grad_norm = total_grad_norm ** 0.5
 
         print(
-            f"  Gradient tensors : {len(last_layer_grads)}"
+            f"  Gradient tensors : {len(trainable_grads)}"
         )
 
         print(
             f"  Total grad norm  : {total_grad_norm:.6e}"
-        )
-
-    # -------------------------------------------------------------------------
-    # First decoder layer
-    # -------------------------------------------------------------------------
-
-    first_layer = layers[0]
-
-    first_layer_grads = [
-        param.grad
-        for param in first_layer.parameters()
-        if param.grad is not None
-    ]
-
-    print()
-    print("Layer 00 (FROZEN):")
-
-    if len(first_layer_grads) == 0:
-
-        print("  Gradient: NONE ✓")
-
-    else:
-
-        print(
-            f"  Gradient tensors found: "
-            f"{len(first_layer_grads)}"
-        )
-
-    # -------------------------------------------------------------------------
-    # LM head
-    # -------------------------------------------------------------------------
-
-    lm_head_grads = [
-        param.grad
-        for param in model.lm_head.parameters()
-        if param.grad is not None
-    ]
-
-    print()
-    print("LM head / vocabulary projection:")
-
-    if len(lm_head_grads) == 0:
-
-        print("  Gradient: NONE")
-
-    else:
-
-        total_lm_grad_norm = 0.0
-
-        for grad in lm_head_grads:
-
-            total_lm_grad_norm += (
-                grad.detach()
-                .float()
-                .norm()
-                .item() ** 2
-            )
-
-        total_lm_grad_norm = (
-            total_lm_grad_norm ** 0.5
-        )
-
-        print(
-            f"  Gradient tensors : {len(lm_head_grads)}"
-        )
-
-        print(
-            f"  Total grad norm  : "
-            f"{total_lm_grad_norm:.6e}"
         )
 
     print("=" * 80)
@@ -620,6 +585,11 @@ def inspect_decision_head(model, title):
         f"Bias: "
         f"{bias.detach().float().cpu().numpy()}"
     )
+
+    # -------------------------------------------------------------------------
+    # Since weight is initialized to zero, score should be determined by bias.
+    # Use a zero hidden state to inspect the baseline decision score.
+    # -------------------------------------------------------------------------
 
     hidden_size = model.config.hidden_size
 
@@ -795,7 +765,7 @@ def main():
     initialize_decision_head(model)
 
     # =========================================================================
-    # Freeze backbone
+    # Freeze 60%
     # =========================================================================
 
     freeze_backbone(model)
@@ -823,6 +793,13 @@ def main():
         [sample]
     )
 
+    # -------------------------------------------------------------------------
+    # Explicitly use PyTorch format.
+    #
+    # Dataset normally returns Python lists for token sequences.
+    # with_format("torch") makes these columns torch.Tensor when accessed.
+    # -------------------------------------------------------------------------
+
     dataset = dataset.with_format(
         "torch",
         columns=[
@@ -839,7 +816,7 @@ def main():
     )
 
     # =========================================================================
-    # Verify dataset format
+    # Verify dataset format before Trainer
     # =========================================================================
 
     print()
@@ -860,7 +837,7 @@ def main():
     )
 
     print(
-        "attention_mask     :",
+        "attention_mask      :",
         type(dataset_sample["attention_mask"]),
         tuple(dataset_sample["attention_mask"].shape),
     )
@@ -888,14 +865,29 @@ def main():
     )
 
     training_args = TrainingArguments(
+        # ---------------------------------------------------------------------
+        # Output
+        # ---------------------------------------------------------------------
 
         output_dir=OUTPUT_DIR,
+
+        # ---------------------------------------------------------------------
+        # Batch
+        # ---------------------------------------------------------------------
 
         per_device_train_batch_size=1,
 
         gradient_accumulation_steps=1,
 
+        # ---------------------------------------------------------------------
+        # One-step test
+        # ---------------------------------------------------------------------
+
         max_steps=MAX_STEPS,
+
+        # ---------------------------------------------------------------------
+        # Optimizer
+        # ---------------------------------------------------------------------
 
         learning_rate=LEARNING_RATE,
 
@@ -907,18 +899,32 @@ def main():
 
         weight_decay=0.0,
 
+        # ---------------------------------------------------------------------
+        # Precision
+        # ---------------------------------------------------------------------
+
         bf16=bf16_enabled,
 
         fp16=False,
 
         # ---------------------------------------------------------------------
         # IMPORTANT:
-        # NO gradient checkpointing.
+        # Use Hugging Face Trainer's native gradient checkpointing.
+        #
+        # No custom checkpoint code is added to the model forward.
         # ---------------------------------------------------------------------
 
-        gradient_checkpointing=False,
+        gradient_checkpointing=True,
+
+        # ---------------------------------------------------------------------
+        # Custom ART forward arguments
+        # ---------------------------------------------------------------------
 
         remove_unused_columns=False,
+
+        # ---------------------------------------------------------------------
+        # Logging
+        # ---------------------------------------------------------------------
 
         logging_strategy="steps",
 
@@ -926,17 +932,41 @@ def main():
 
         logging_first_step=True,
 
+        # ---------------------------------------------------------------------
+        # No evaluation
+        # ---------------------------------------------------------------------
+
         eval_strategy="no",
+
+        # ---------------------------------------------------------------------
+        # No checkpoint saving
+        # ---------------------------------------------------------------------
 
         save_strategy="no",
 
+        # ---------------------------------------------------------------------
+        # Disable reporting integrations
+        # ---------------------------------------------------------------------
+
         report_to="none",
+
+        # ---------------------------------------------------------------------
+        # DataLoader
+        # ---------------------------------------------------------------------
 
         dataloader_num_workers=0,
 
         dataloader_pin_memory=False,
 
+        # ---------------------------------------------------------------------
+        # Gradient clipping
+        # ---------------------------------------------------------------------
+
         max_grad_norm=1.0,
+
+        # ---------------------------------------------------------------------
+        # Reproducibility
+        # ---------------------------------------------------------------------
 
         seed=SEED,
 
