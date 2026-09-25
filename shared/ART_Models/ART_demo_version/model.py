@@ -443,7 +443,7 @@ class AttentionMixingProbeForCausalLM(
         # GENERATION
         # =====================================================================
 
-        return self.forward_generation(
+        return self.forward_generate(
             input_ids=input_ids,
             attention_mask=attention_mask,
             position_ids=position_ids,
@@ -1149,6 +1149,8 @@ class AttentionMixingProbeForCausalLM(
         # =====================================================================
         # 4. Forward current input
         # =====================================================================
+        kwargs.pop("document_attention_mask", None)
+        kwargs.pop("retrieval_decision", None)
 
         outputs: BaseModelOutputWithPast = self.model(
             input_ids=input_ids,
@@ -1283,6 +1285,8 @@ class AttentionMixingProbeForCausalLM(
                 # The newly retrieved document becomes available to
                 # subsequent generated tokens.
                 # -------------------------------------------------------------
+                kwargs.pop("document_attention_mask", None)
+                kwargs.pop("retrieval_decision", None)
 
                 document_outputs: BaseModelOutputWithPast = (
                     self.model(
@@ -1468,7 +1472,6 @@ class AttentionMixingProbeForCausalLM(
             # --------------------------------------------------------
             # 3.4 Forward model
             # --------------------------------------------------------
-
             outputs: BaseModelOutputWithPast = self.model(
                 input_ids=input_ids,
                 attention_mask=attention_mask,
@@ -1580,9 +1583,11 @@ class AttentionMixingProbeForCausalLM(
         # 7. Compute language modeling loss
         # ============================================================
 
-        lm_loss = self.compute_loss(
-            labels=labels,
+        lm_loss = self.loss_function(
             logits=logits,
+            labels=labels,
+            vocab_size=self.config.vocab_size,
+            **kwargs,
         )
 
         # ============================================================
@@ -1591,7 +1596,7 @@ class AttentionMixingProbeForCausalLM(
 
         loss = (
             lm_loss
-            + RETRIEVAL_COST * total_decision_score
+            + RETRIEVAL_COST * total_decision_score.sum()
         )
 
         # ============================================================

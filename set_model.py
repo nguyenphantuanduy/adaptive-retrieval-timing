@@ -14,21 +14,6 @@ MODEL_REPO = "adaptive-retrieval-timing/ART-Demo-Qwen2.5-3B"
 
 DTYPE = torch.bfloat16
 
-# -------------------------------------------------------------------------
-# Retrieval decision initialization
-#
-# weight = 0
-# bias   = 0
-#
-# Therefore:
-#
-# decision_logit = 0
-# decision_score = sigmoid(0) = 0.5
-# -------------------------------------------------------------------------
-
-DECISION_WEIGHT = 0.0
-DECISION_BIAS = 0.0
-
 
 # =============================================================================
 # INITIALIZE RETRIEVAL DECISION HEAD
@@ -36,20 +21,20 @@ DECISION_BIAS = 0.0
 
 def initialize_decision_head(model):
     """
-    Set the retrieval decision head to produce an initial score of 0.5.
+    Randomly initialize the retrieval decision head.
 
-    Since:
+    The retrieval decision head is:
 
-        decision = sigmoid(weight @ hidden_state + bias)
+        decision_logit = weight @ hidden_state + bias
+        decision_score = sigmoid(decision_logit)
 
-    and we set:
+    The projection layer is initialized using PyTorch's default
+    nn.Linear initialization:
 
-        weight = 0
-        bias   = 0
+        weight -> Kaiming uniform
+        bias   -> uniform based on fan-in
 
-    the initial decision score becomes:
-
-        sigmoid(0) = 0.5
+    Therefore, the initial decision score is not forced to 0.5.
     """
 
     print()
@@ -78,38 +63,55 @@ def initialize_decision_head(model):
     )
 
     print(
+        f"Weight std      : "
+        f"{weight.detach().float().std().item():.6e}"
+    )
+
+    print(
         f"Weight abs mean : "
         f"{weight.detach().float().abs().mean().item():.6e}"
     )
 
     print(
-        f"Bias            : "
-        f"{bias.detach().float().cpu().numpy()}"
+        f"Bias mean       : "
+        f"{bias.detach().float().mean().item():+.6e}"
     )
 
-    # -------------------------------------------------------------------------
-    # Set weight and bias
-    # -------------------------------------------------------------------------
+    print(
+        f"Bias std        : "
+        f"{bias.detach().float().std().item():.6e}"
+    )
+
+    # =========================================================================
+    # Random initialization
+    # =========================================================================
 
     with torch.no_grad():
 
-        weight.zero_()
-
-        bias.fill_(DECISION_BIAS)
-
-    # -------------------------------------------------------------------------
-    # Expected score
-    # -------------------------------------------------------------------------
-
-    expected_score = torch.sigmoid(
-        torch.tensor(
-            DECISION_BIAS,
-            dtype=torch.float32,
+        # Use the same initialization as nn.Linear.reset_parameters().
+        torch.nn.init.kaiming_uniform_(
+            weight,
+            a=5 ** 0.5,
         )
-    ).item()
+
+        fan_in, _ = torch.nn.init._calculate_fan_in_and_fan_out(
+            weight
+        )
+
+        bound = 1 / (fan_in ** 0.5)
+
+        torch.nn.init.uniform_(
+            bias,
+            -bound,
+            bound,
+        )
+
+    # =========================================================================
+    # Statistics after initialization
+    # =========================================================================
 
     print()
-    print("After initialization:")
+    print("After random initialization:")
 
     print(
         f"Weight mean     : "
@@ -117,19 +119,43 @@ def initialize_decision_head(model):
     )
 
     print(
+        f"Weight std      : "
+        f"{weight.detach().float().std().item():.6e}"
+    )
+
+    print(
         f"Weight abs mean : "
         f"{weight.detach().float().abs().mean().item():.6e}"
     )
 
     print(
-        f"Bias            : "
-        f"{bias.detach().float().cpu().numpy()}"
+        f"Weight min      : "
+        f"{weight.detach().float().min().item():+.6e}"
     )
 
-    print()
     print(
-        f"Expected decision score : "
-        f"{expected_score:.6f}"
+        f"Weight max      : "
+        f"{weight.detach().float().max().item():+.6e}"
+    )
+
+    print(
+        f"Bias mean       : "
+        f"{bias.detach().float().mean().item():+.6e}"
+    )
+
+    print(
+        f"Bias std        : "
+        f"{bias.detach().float().std().item():.6e}"
+    )
+
+    print(
+        f"Bias min        : "
+        f"{bias.detach().float().min().item():+.6e}"
+    )
+
+    print(
+        f"Bias max        : "
+        f"{bias.detach().float().max().item():+.6e}"
     )
 
     print("=" * 80)
@@ -141,11 +167,15 @@ def initialize_decision_head(model):
 
 def verify_decision_score(model):
     """
-    Verify the retrieval decision head using a zero hidden state.
+    Verify the randomly initialized retrieval decision head.
 
-    With weight=0 and bias=0:
+    Instead of expecting exactly 0.5, this function evaluates the
+    decision head on several hidden states and reports the resulting
+    decision scores.
 
-        sigmoid(0) = 0.5
+    Note:
+        A zero hidden state only measures sigmoid(bias), so it does not
+        fully test whether the randomly initialized weight is active.
     """
 
     print()
@@ -161,9 +191,73 @@ def verify_decision_score(model):
 
     hidden_size = model.config.hidden_size
 
-    # -------------------------------------------------------------------------
+    # =========================================================================
+    # Create test hidden states
+    # =========================================================================
+
+    test_hidden = torch.randn(
+        8,
+        1,
+        hidden_size,
+        device=weight.device,
+        dtype=weight.dtype,
+    )
+
+    with torch.no_grad():
+
+        decision_scores = (
+            model.retrieval_decision_head(
+                test_hidden
+            )
+        )
+
+    scores = (
+        decision_scores
+        .detach()
+        .float()
+        .cpu()
+    )
+
+    # =========================================================================
+    # Statistics
+    # =========================================================================
+
+    print()
+
+    print(
+        f"Decision score mean : "
+        f"{scores.mean().item():.8f}"
+    )
+
+    print(
+        f"Decision score std  : "
+        f"{scores.std().item():.8f}"
+    )
+
+    print(
+        f"Decision score min  : "
+        f"{scores.min().item():.8f}"
+    )
+
+    print(
+        f"Decision score max  : "
+        f"{scores.max().item():.8f}"
+    )
+
+    print()
+
+    print("Individual test scores:")
+
+    for index, score in enumerate(scores.tolist()):
+
+        print(
+            f"  [{index}] "
+            f"{score:.8f}"
+        )
+
+    # =========================================================================
     # Zero hidden state
-    # -------------------------------------------------------------------------
+    # =========================================================================
 
     zero_hidden = torch.zeros(
         1,
@@ -175,14 +269,14 @@ def verify_decision_score(model):
 
     with torch.no_grad():
 
-        decision_score = (
+        zero_decision_score = (
             model.retrieval_decision_head(
                 zero_hidden
             )
         )
 
-    score = (
-        decision_score
+    zero_score = (
+        zero_decision_score
         .detach()
         .float()
         .cpu()
@@ -190,29 +284,41 @@ def verify_decision_score(model):
     )
 
     print()
+
     print(
-        f"Decision score : {score:.8f}"
+        f"Decision score for zero hidden state : "
+        f"{zero_score:.8f}"
     )
 
     print(
-        f"Expected       : 0.50000000"
+        "Note: this value is sigmoid(bias)."
     )
 
-    print(
-        f"Difference     : "
-        f"{abs(score - 0.5):.8e}"
-    )
-
-    # -------------------------------------------------------------------------
+    # =========================================================================
     # Sanity check
-    # -------------------------------------------------------------------------
+    # =========================================================================
 
-    if abs(score - 0.5) < 1e-5:
+    weight_abs_mean = (
+        weight.detach()
+        .float()
+        .abs()
+        .mean()
+        .item()
+    )
+
+    if weight_abs_mean > 0:
+
         print()
-        print("✓ Decision head initialized correctly.")
+        print(
+            "✓ Decision head was randomly initialized."
+        )
+
     else:
+
         print()
-        print("✗ WARNING: Decision score is not approximately 0.5.")
+        print(
+            "✗ WARNING: Decision head weight is still zero."
+        )
 
     print("=" * 80)
 
@@ -244,8 +350,7 @@ def push_model(model):
     model.push_to_hub(
         MODEL_REPO,
         commit_message=(
-            "Initialize retrieval decision head "
-            "with zero weight and zero bias"
+            "Randomly initialize retrieval decision head"
         ),
     )
 
@@ -263,7 +368,7 @@ def main():
 
     print()
     print("=" * 80)
-    print("ART DECISION HEAD INITIALIZATION")
+    print("ART DECISION HEAD RANDOM INITIALIZATION")
     print("=" * 80)
 
     # =========================================================================
@@ -327,7 +432,7 @@ def main():
     # =========================================================================
 
     print()
-    print("4. Initializing retrieval decision head...")
+    print("4. Randomly initializing retrieval decision head...")
 
     initialize_decision_head(model)
 
@@ -382,15 +487,15 @@ def main():
     )
 
     print(
-        "  weight = 0"
+        "  weight = random nn.Linear initialization"
     )
 
     print(
-        "  bias   = 0"
+        "  bias   = random nn.Linear initialization"
     )
 
     print(
-        "  score  = sigmoid(0) = 0.5"
+        "  score  = sigmoid(weight @ hidden + bias)"
     )
 
     print()
