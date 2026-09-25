@@ -7,6 +7,45 @@ import torch.nn.functional as F
 from huggingface_hub import hf_hub_download
 from transformers import AutoTokenizer, AutoModel
 
+def truncate_passages(
+    passages: str,
+    tokenizer=None,
+    max_tokens: int = -1,
+) -> str:
+    """
+    Truncate concatenated passages to at most `max_tokens` tokens.
+
+    If `max_tokens == -1`, the input is returned unchanged without
+    performing any tokenization or tokenizer validation.
+    """
+    if not isinstance(passages, str):
+        raise TypeError("passages must be a string")
+
+    if max_tokens == -1:
+        return passages
+
+    if max_tokens <= 0:
+        raise ValueError("max_tokens must be > 0 or -1")
+
+    if tokenizer is None:
+        raise ValueError(
+            "tokenizer must be provided when max_tokens != -1"
+        )
+
+    tokens = tokenizer.encode(
+        passages,
+        add_special_tokens=False,
+    )
+
+    if len(tokens) <= max_tokens:
+        return passages
+
+    truncated_tokens = tokens[:max_tokens]
+
+    return tokenizer.decode(
+        truncated_tokens,
+        skip_special_tokens=True,
+    )
 
 class MuSiQueRetrievalDB:
     """
@@ -191,9 +230,12 @@ class MuSiQueRetrievalDB:
         self,
         query: str,
         top_k: Optional[int] = None,
+        max_passage_tokens: int = -1,
+        tokenizer=None,
     ) -> str:
         """
-        Retrieve the top-k passages for a query and return them as ONE string.
+        Retrieve the top-k passages for a query and return them as ONE
+        observation string.
 
         Parameters
         ----------
@@ -203,6 +245,14 @@ class MuSiQueRetrievalDB:
         top_k:
             Number of passages to retrieve. If omitted, uses the value
             supplied when constructing the database.
+
+        max_passage_tokens:
+            Maximum number of tokens allowed for the concatenated retrieved
+            passages. If -1, no truncation is performed.
+
+        tokenizer:
+            Tokenizer used for truncation. Only required when
+            max_passage_tokens != -1.
 
         Returns
         -------
@@ -217,7 +267,7 @@ class MuSiQueRetrievalDB:
                 document...
                 </observation>
 
-            The document text is taken from the JSONL "document" field.
+            The observation markers are always preserved.
         """
         if not isinstance(query, str) or not query.strip():
             raise ValueError("query must be a non-empty string")
@@ -237,9 +287,11 @@ class MuSiQueRetrievalDB:
             k,
         )
 
-        document_parts = [
-            "<observation>\n"
-        ]
+        # --------------------------------------------------------------
+        # Build concatenated retrieved passages
+        # --------------------------------------------------------------
+
+        passage_parts = []
 
         for idx in indices[0]:
             idx = int(idx)
@@ -250,16 +302,32 @@ class MuSiQueRetrievalDB:
 
             doc = self.corpus[idx]
 
-            document_parts.append(
+            passage_parts.append(
                 f"Title: {doc['title']}\n"
                 f"{doc['document']}\n"
             )
 
-        document_parts.append(
-            "</observation>\n"
+        passages = "\n".join(passage_parts)
+
+        # --------------------------------------------------------------
+        # Truncate retrieved passages if requested
+        # --------------------------------------------------------------
+
+        passages = truncate_passages(
+            passages=passages,
+            tokenizer=tokenizer,
+            max_tokens=max_passage_tokens,
         )
 
-        return "\n".join(document_parts)
+        # --------------------------------------------------------------
+        # Add observation markers AFTER truncation
+        # --------------------------------------------------------------
+
+        return (
+            "\n<observation>\n"
+            f"{passages}"
+            "\n</observation>\n"
+        )
 
     def search_with_metadata(
         self,

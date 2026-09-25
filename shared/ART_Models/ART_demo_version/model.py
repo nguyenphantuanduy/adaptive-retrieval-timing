@@ -46,7 +46,8 @@ from .utils import (
 
 THRESHOLD = 0.4297
 RETRIEVAL_COST = 0.095349
-MAX_PASSAGE_TOKENS = 1152
+MAX_RETRIEVAL_CONTEXT_TOKENS = 500
+MAX_RETRIEVAL_COUNT = 4
 
 class AttentionMixingProbePreTrainedModel(Qwen2PreTrainedModel):
     _no_split_modules = [
@@ -315,12 +316,13 @@ class AttentionMixingProbeForCausalLM(
 
         self.isTraining = False
 
-        self.max_retrievals = 4
+        self.max_retrievals = MAX_RETRIEVAL_COUNT
         self.retrieval_count = 0
-        self.retrieval_count_for_logging = []
 
         self.retriever = None
         self.tokenizer = None
+
+        self.retrieval_count_for_logging = []
 
         # Initialize weights and apply final processing
         self.post_init()
@@ -345,6 +347,39 @@ class AttentionMixingProbeForCausalLM(
                 trust_remote_code=True,
             )
         return self.tokenizer
+
+    def _append_trajectory_step(
+        self,
+        trajectory: list[dict],
+        input_ids: torch.LongTensor | None,
+        attention_mask: torch.Tensor | None,
+        document_attention_mask: torch.Tensor | None,
+        retrieval_decision: torch.Tensor | None,
+    ) -> None:
+        trajectory.append(
+            {
+                "input_ids": (
+                    input_ids.clone()
+                    if input_ids is not None
+                    else None
+                ),
+                "attention_mask": (
+                    attention_mask.clone()
+                    if attention_mask is not None
+                    else None
+                ),
+                "document_attention_mask": (
+                    document_attention_mask.clone()
+                    if document_attention_mask is not None
+                    else None
+                ),
+                "retrieval_decision": (
+                    retrieval_decision.clone()
+                    if retrieval_decision is not None
+                    else None
+                ),
+            }
+        )
 
     # =========================================================================
     # Forward dispatcher
@@ -426,7 +461,7 @@ class AttentionMixingProbeForCausalLM(
     # ART training forward
     # =========================================================================
 
-    def forward_training(
+    def forward_collect(
         self,
         question: str | None = None,
         question_input_ids: torch.LongTensor | None = None,
@@ -438,7 +473,7 @@ class AttentionMixingProbeForCausalLM(
         labels: torch.LongTensor | None = None,
         logits_to_keep: int | torch.Tensor = 0,
         **kwargs: Unpack[TransformersKwargs],
-    ) -> CausalLMOutputWithPast:
+    ) -> dict:
 
         # =====================================================================
         # 0. Basic validation
@@ -477,7 +512,8 @@ class AttentionMixingProbeForCausalLM(
         # =====================================================================
 
         self.retrieval_count = 0
-        retrieval_scores = []
+        input_ids_buffer = None
+        trajectory = []
 
         # =====================================================================
         # 2. Initial sequence length
@@ -494,6 +530,7 @@ class AttentionMixingProbeForCausalLM(
             past_key_values = ARTCache(
                 question=question,
                 config=self.config,
+                tokenizer=self._get_tokenizer(),
             )
 
         # =====================================================================
@@ -502,6 +539,7 @@ class AttentionMixingProbeForCausalLM(
         # Question is processed without document context.
         # =====================================================================
         attention_mask = attention_mask[:, :current_sequence_length]
+        input_ids_buffer = question_input_ids
 
         question_outputs: BaseModelOutputWithPast = self.model(
             input_ids=question_input_ids,
@@ -523,20 +561,9 @@ class AttentionMixingProbeForCausalLM(
             question_outputs.past_key_values
         )
 
-        # =====================================================================
-        # 5. Question logits
-        # =====================================================================
-
-        question_logits = self.lm_head(
-            question_hidden_states
-        )
-
-        all_logits = [
-            question_logits
-        ]
 
         # =====================================================================
-        # 6. Decision after QUESTION
+        # 5. Decision after QUESTION
         # =====================================================================
 
         question_decision_score = (
@@ -552,34 +579,42 @@ class AttentionMixingProbeForCausalLM(
         document_attention_mask = None
 
         # =====================================================================
-        # 7. Retrieval after QUESTION
+        # 6. Retrieval after QUESTION
         # =====================================================================
 
         if (
             question_decision_score.item() >= THRESHOLD
             and self.retrieval_count < self.max_retrievals
         ):
+            
+            self._append_trajectory_step(
+                trajectory=trajectory,
+                input_ids=input_ids_buffer,
+                attention_mask=attention_mask,
+                document_attention_mask=document_attention_mask,
+                retrieval_decision=decision_score,
+            )
 
             # -----------------------------------------------------------------
-            # 7.1 Retrieve using original question
+            # 6.1 Retrieve using original question
             # -----------------------------------------------------------------
 
             
             retrieval_text = self._get_retriever().search(
-                question
+                query=question,
+                tokenizer=self._get_tokenizer(),
+                max_passage_tokens=MAX_RETRIEVAL_CONTEXT_TOKENS,
             )
 
             self.retrieval_count += 1
 
             # -----------------------------------------------------------------
-            # 7.2 Tokenize retrieved document
+            # 6.2 Tokenize retrieved document
             # -----------------------------------------------------------------
 
             document_inputs = self._get_tokenizer()(
                 retrieval_text,
                 return_tensors="pt",
-                truncation=True,
-                max_length=MAX_PASSAGE_TOKENS,
             )
 
             document_input_ids = (
@@ -592,23 +627,20 @@ class AttentionMixingProbeForCausalLM(
             )
 
             # -----------------------------------------------------------------
-            # 7.3 Create document attention mask
+            # 6.3 Create document attention mask
             # -----------------------------------------------------------------
 
-            document_attention_mask = (
+            new_document_attention_mask = (
                 create_document_attention_mask(
                     current_sequence_len=current_sequence_length,
                     document_len=document_length,
                 ).to(question_input_ids.device)
             )
 
-            decision_score = question_decision_score
+            new_decision_score = question_decision_score
 
-            retrieval_scores.append(
-                question_decision_score
-            )
             # -----------------------------------------------------------------
-            # 7.4 Extend normal attention mask
+            # 6.4 Extend normal attention mask
             # -----------------------------------------------------------------
 
             attention_mask = update_attention_mask(
@@ -617,7 +649,7 @@ class AttentionMixingProbeForCausalLM(
             )
 
             # -----------------------------------------------------------------
-            # 7.5 Insert -100 labels for document tokens
+            # 6.5 Insert -100 labels for document tokens
             # -----------------------------------------------------------------
 
             ignore_labels = torch.full(
@@ -640,8 +672,15 @@ class AttentionMixingProbeForCausalLM(
             )
 
             # -----------------------------------------------------------------
-            # 7.6 Forward DOCUMENT
+            # 6.6 Forward DOCUMENT
             # -----------------------------------------------------------------
+            input_ids_buffer = torch.cat(
+                [
+                    input_ids_buffer,
+                    document_input_ids,
+                ],
+                dim=1,
+            )
 
             document_outputs: BaseModelOutputWithPast = self.model(
                 input_ids=document_input_ids,
@@ -657,26 +696,13 @@ class AttentionMixingProbeForCausalLM(
                 document_outputs.past_key_values
             )
 
-            # -----------------------------------------------------------------
-            # 7.7 Document logits
-            # -----------------------------------------------------------------
-
-            document_hidden_states = (
-                document_outputs.last_hidden_state
-            )
-
-            document_logits = self.lm_head(
-                document_hidden_states
-            )
-
-            all_logits.append(
-                document_logits
-            )
-
             current_sequence_length += document_length
+            document_attention_mask = new_document_attention_mask
+            decision_score = new_decision_score
+            past_key_values.synchronize_cache()
 
         # =====================================================================
-        # 8. Forward ANSWER ONLINE, SENTENCE BY SENTENCE
+        # 7. Forward ANSWER ONLINE, SENTENCE BY SENTENCE
         # =====================================================================
 
         sentence_buffer = []
@@ -684,13 +710,13 @@ class AttentionMixingProbeForCausalLM(
         for token_id in answer_input_ids[0]:
 
             # -----------------------------------------------------------------
-            # 8.1 Add current token to the local sentence buffer
+            # 7.1 Add current token to the local sentence buffer
             # -----------------------------------------------------------------
 
             sentence_buffer.append(token_id)
 
             # -----------------------------------------------------------------
-            # 8.2 Feed token to the online sentence boundary detector
+            # 7.2 Feed token to the online sentence boundary detector
             # -----------------------------------------------------------------
 
             sentence_completed = (
@@ -702,7 +728,7 @@ class AttentionMixingProbeForCausalLM(
                 continue
 
             # -----------------------------------------------------------------
-            # 8.3 A sentence has just been completed
+            # 7.3 A sentence has just been completed
             # -----------------------------------------------------------------
 
             sentence_tokens = (
@@ -718,7 +744,7 @@ class AttentionMixingProbeForCausalLM(
             )
 
             # -----------------------------------------------------------------
-            # 8.4 Extend normal attention mask
+            # 7.4 Extend normal attention mask
             # -----------------------------------------------------------------
 
             attention_mask = update_attention_mask(
@@ -727,10 +753,17 @@ class AttentionMixingProbeForCausalLM(
             )
 
             # -----------------------------------------------------------------
-            # 8.5 Forward CURRENT sentence
+            # 7.5 Forward CURRENT sentence
             #
             # Uses the currently active document context.
             # -----------------------------------------------------------------
+            input_ids_buffer = torch.cat(
+                [
+                    input_ids_buffer,
+                    sentence_tokens,
+                ],
+                dim=1,
+            )
 
             sentence_outputs: BaseModelOutputWithPast = (
                 self.model(
@@ -751,23 +784,15 @@ class AttentionMixingProbeForCausalLM(
             current_sequence_length += sentence_length
 
             # -----------------------------------------------------------------
-            # 8.6 Sentence logits
+            # 7.6 Sentence hidden states
             # -----------------------------------------------------------------
 
             sentence_hidden_states = (
                 sentence_outputs.last_hidden_state
             )
 
-            sentence_logits = self.lm_head(
-                sentence_hidden_states
-            )
-
-            all_logits.append(
-                sentence_logits
-            )
-
             # -----------------------------------------------------------------
-            # 8.7 New retrieval decision after CURRENT sentence
+            # 7.7 New retrieval decision after CURRENT sentence
             # -----------------------------------------------------------------
 
             new_decision_score = (
@@ -776,8 +801,12 @@ class AttentionMixingProbeForCausalLM(
                 )
             )
 
+            # retrieval_scores.append(
+            #     new_decision_score
+            # )
+
             # -----------------------------------------------------------------
-            # 8.8 Retrieval after CURRENT sentence
+            # 7.8 Retrieval after CURRENT sentence
             # -----------------------------------------------------------------
 
             if (
@@ -785,12 +814,16 @@ class AttentionMixingProbeForCausalLM(
                 and self.retrieval_count < self.max_retrievals
             ):
 
-                retrieval_scores.append(
-                    new_decision_score
+                self._append_trajectory_step(
+                    trajectory=trajectory,
+                    input_ids=input_ids_buffer,
+                    attention_mask=attention_mask,
+                    document_attention_mask=document_attention_mask,
+                    retrieval_decision=decision_score,
                 )
 
                 # -------------------------------------------------------------
-                # 8.8.1 Build retrieval query from CURRENT completed sentence
+                # 7.8.1 Build retrieval query from CURRENT completed sentence
                 # -------------------------------------------------------------
 
                 retrieval_query = (
@@ -798,27 +831,27 @@ class AttentionMixingProbeForCausalLM(
                 )
 
                 # -------------------------------------------------------------
-                # 8.8.2 Retrieve
+                # 7.8.2 Retrieve
                 # -------------------------------------------------------------
 
                 retrieval_text = (
                     self._get_retriever().search(
-                        retrieval_query
+                        query=retrieval_query,
+                        tokenizer=self._get_tokenizer(),
+                        max_passage_tokens=MAX_RETRIEVAL_CONTEXT_TOKENS,
                     )
                 )
 
                 self.retrieval_count += 1
 
                 # -------------------------------------------------------------
-                # 8.8.3 Tokenize retrieved document
+                # 7.8.3 Tokenize retrieved document
                 # -------------------------------------------------------------
 
                 document_inputs = (
                     self._get_tokenizer()(
                         retrieval_text,
                         return_tensors="pt",
-                        truncation=True,
-                        max_length=MAX_PASSAGE_TOKENS,
                     )
                 )
 
@@ -832,10 +865,10 @@ class AttentionMixingProbeForCausalLM(
                 )
 
                 # -------------------------------------------------------------
-                # 8.8.4 Create new document attention mask
+                # 7.8.4 Create new document attention mask
                 # -------------------------------------------------------------
 
-                document_attention_mask = (
+                new_document_attention_mask = (
                     create_document_attention_mask(
                         current_sequence_len=current_sequence_length,
                         document_len=document_length,
@@ -843,7 +876,7 @@ class AttentionMixingProbeForCausalLM(
                 )
 
                 # -------------------------------------------------------------
-                # 8.8.5 Extend normal attention mask
+                # 7.8.5 Extend normal attention mask
                 # -------------------------------------------------------------
 
                 attention_mask = update_attention_mask(
@@ -852,7 +885,7 @@ class AttentionMixingProbeForCausalLM(
                 )
 
                 # -------------------------------------------------------------
-                # 8.8.6 Insert -100 labels for document tokens
+                # 7.8.6 Insert -100 labels for document tokens
                 # -------------------------------------------------------------
 
                 ignore_labels = torch.full(
@@ -875,8 +908,15 @@ class AttentionMixingProbeForCausalLM(
                 )
 
                 # -------------------------------------------------------------
-                # 8.8.7 Forward NEW DOCUMENT
+                # 7.8.7 Forward NEW DOCUMENT
                 # -------------------------------------------------------------
+                input_ids_buffer = torch.cat(
+                    [
+                        input_ids_buffer,
+                        document_input_ids,
+                    ],
+                    dim=1,
+                )
 
                 document_outputs: BaseModelOutputWithPast = (
                     self.model(
@@ -885,7 +925,7 @@ class AttentionMixingProbeForCausalLM(
                         past_key_values=past_key_values,
                         use_cache=True,
                         document_attention_mask=document_attention_mask,
-                        retrieval_decision=new_decision_score,
+                        retrieval_decision=decision_score,
                         **kwargs,
                     )
                 )
@@ -894,33 +934,18 @@ class AttentionMixingProbeForCausalLM(
                     document_outputs.past_key_values
                 )
 
-                # -------------------------------------------------------------
-                # 8.8.8 Document logits
-                # -------------------------------------------------------------
-
-                document_hidden_states = (
-                    document_outputs.last_hidden_state
-                )
-
-                document_logits = (
-                    self.lm_head(
-                        document_hidden_states
-                    )
-                )
-
-                all_logits.append(
-                    document_logits
-                )
-
                 current_sequence_length += document_length
 
                 # -------------------------------------------------------------
-                # 8.8.9 NEW document becomes active
+                # 7.8.8 NEW document becomes active
                 # -------------------------------------------------------------
 
                 decision_score = (
                     new_decision_score
                 )
+
+                document_attention_mask = new_document_attention_mask
+                past_key_values.synchronize_cache()
 
             # -----------------------------------------------------------------
             # If no retrieval:
@@ -934,7 +959,7 @@ class AttentionMixingProbeForCausalLM(
 
 
         # =====================================================================
-        # 9. Remaining incomplete sentence
+        # 8. Remaining incomplete sentence
         #
         # If the answer does not end with a detected sentence boundary,
         # process the remaining tokens as the final sentence.
@@ -952,7 +977,7 @@ class AttentionMixingProbeForCausalLM(
             )
 
             # -----------------------------------------------------------------
-            # 9.1 Extend normal attention mask
+            # 8.1 Extend normal attention mask
             # -----------------------------------------------------------------
 
             attention_mask = update_attention_mask(
@@ -961,9 +986,17 @@ class AttentionMixingProbeForCausalLM(
             )
 
             # -----------------------------------------------------------------
-            # 9.2 Forward final incomplete sentence
+            # 8.2 Forward final incomplete sentence
             # -----------------------------------------------------------------
 
+            input_ids_buffer = torch.cat(
+                [
+                    input_ids_buffer,
+                    sentence_tokens,
+                ],
+                dim=1,
+            )
+            
             sentence_outputs: BaseModelOutputWithPast = (
                 self.model(
                     input_ids=sentence_tokens,
@@ -980,28 +1013,21 @@ class AttentionMixingProbeForCausalLM(
                 sentence_outputs.past_key_values
             )
 
-            current_sequence_length += sentence_length
-
-            # -----------------------------------------------------------------
-            # 9.3 Final sentence logits
-            # -----------------------------------------------------------------
-
             sentence_hidden_states = (
                 sentence_outputs.last_hidden_state
             )
 
-            sentence_logits = (
-                self.lm_head(
-                    sentence_hidden_states
-                )
-            )
-
-            all_logits.append(
-                sentence_logits
+            current_sequence_length += sentence_length
+            self._append_trajectory_step(
+                trajectory=trajectory,
+                input_ids=input_ids_buffer,
+                attention_mask=attention_mask,
+                document_attention_mask=document_attention_mask,
+                retrieval_decision=decision_score,
             )
 
             # -----------------------------------------------------------------
-            # 9.4 Decision after final sentence
+            # 8.3 Decision after final sentence
             # -----------------------------------------------------------------
 
             new_decision_score = (
@@ -1010,73 +1036,22 @@ class AttentionMixingProbeForCausalLM(
                 )
             )
 
-            # -----------------------------------------------------------------
-            # 9.5 No retrieval after final sentence
-            #
-            # This is intentionally the final answer segment, so there is
-            # no subsequent sentence that would consume a newly retrieved
-            # document.
-            # -----------------------------------------------------------------
+            if (
+                new_decision_score.item() >= THRESHOLD
+                and self.retrieval_count < self.max_retrievals
+            ):
+                self._append_trajectory_step(
+                    trajectory=trajectory,
+                    retrieval_decision=decision_score,
+                )
 
-        # =====================================================================
-        # 10. Concatenate logits
-        # =====================================================================
 
-        logits = torch.cat(
-            all_logits,
-            dim=1,
-        )
+        return {
+            "labels": labels,
+            "trajectory": trajectory,
+        }
 
-        # =====================================================================
-        # 11. Compute loss
-        # =====================================================================
-
-        loss = None
-
-        if labels is not None:
-
-            lm_loss = self.loss_function(
-                logits=logits,
-                labels=labels,
-                vocab_size=self.config.vocab_size,
-                **kwargs,
-            )
-
-            if retrieval_scores:
-
-                retrieval_score_sum = torch.stack(
-                    retrieval_scores
-                ).sum()
-
-            else:
-                retrieval_score_sum = lm_loss.new_zeros(())
-
-            retrieval_cost_loss = (
-                RETRIEVAL_COST * retrieval_score_sum
-            )   
-
-            loss = (
-                lm_loss
-                + retrieval_cost_loss
-            )
-
-        # =====================================================================
-        # 12. Return
-        # =====================================================================
-
-        self.retrieval_count_for_logging.append(
-            self.retrieval_count
-        )
-        
-        return CausalLMOutputWithPast(
-            loss=loss,
-            logits=logits,
-            past_key_values=past_key_values,
-            hidden_states=None,
-            attentions=None,
-        )
-
-    def forward_generation(
+    def forward_generate(
         self,
         input_ids: torch.LongTensor | None = None,
 
@@ -1096,9 +1071,6 @@ class AttentionMixingProbeForCausalLM(
         # =====================================================================
 
         question: str | None = None,
-
-        document_attention_mask: torch.Tensor | None = None,
-        retrieval_decision: torch.Tensor | None = None,
 
         **kwargs: Unpack[TransformersKwargs],
     ) -> CausalLMOutputWithPast:
@@ -1134,6 +1106,7 @@ class AttentionMixingProbeForCausalLM(
         ):
             past_key_values = ARTCache(
                 question=question,
+                tokenizer=self._get_tokenizer(),
                 config=self.config,
             )
 
@@ -1142,19 +1115,25 @@ class AttentionMixingProbeForCausalLM(
             # Reset retrieval quota for a new generation.
             self.retrieval_count = 0
 
+        else:
+            attention_mask = past_key_values.attention_mask
+
+            attention_mask = update_attention_mask(
+                attention_mask,
+                num_tokens=1,
+            )
+
         # =====================================================================
         # 2. Recover persistent ART retrieval state from cache
         # =====================================================================
 
-        if document_attention_mask is None:
-            document_attention_mask = (
-                past_key_values.document_attention_mask
-            )
+        document_attention_mask = (
+            past_key_values.document_attention_mask
+        )
 
-        if retrieval_decision is None:
-            retrieval_decision = (
-                past_key_values.retrieval_decision
-            )
+        retrieval_decision = (
+            past_key_values.retrieval_decision
+        )
 
         # =====================================================================
         # 3. Current sequence length
@@ -1244,22 +1223,18 @@ class AttentionMixingProbeForCausalLM(
                 # 6.2.1 Build retrieval query
                 # -------------------------------------------------------------
 
-                if first_token_generation:
-
-                    retrieval_query = question
-
-                else:
-
-                    retrieval_query = (
-                        past_key_values.build_retrieval_query()
-                    )
+                retrieval_query = (
+                    past_key_values.build_retrieval_query()
+                )
 
                 # -------------------------------------------------------------
                 # 6.2.2 Retrieve
                 # -------------------------------------------------------------
 
                 retrieval_text = self._get_retriever().search(
-                    retrieval_query
+                    query=retrieval_query,
+                    max_passage_tokens=MAX_RETRIEVAL_CONTEXT_TOKENS,
+                    tokenizer=self._get_tokenizer(),
                 )
 
                 self.retrieval_count += 1
@@ -1271,8 +1246,6 @@ class AttentionMixingProbeForCausalLM(
                 document_inputs = self._get_tokenizer()(
                     retrieval_text,
                     return_tensors="pt",
-                    truncation=True,
-                    max_length=MAX_PASSAGE_TOKENS,
                 )
 
                 document_input_ids = (
@@ -1318,15 +1291,27 @@ class AttentionMixingProbeForCausalLM(
                         past_key_values=past_key_values,
                         use_cache=True,
                         document_attention_mask=(
-                            new_document_attention_mask
+                            document_attention_mask
                         ),
-                        retrieval_decision=new_decision_score,
+                        retrieval_decision=retrieval_decision,
                         **kwargs,
                     )
                 )
 
                 past_key_values = (
                     document_outputs.past_key_values
+                )
+
+                document_hidden_states = (
+                    document_outputs.last_hidden_state
+                )
+
+                hidden_states = torch.cat(
+                    [
+                        hidden_states,
+                        document_hidden_states,
+                    ],
+                    dim=1,
                 )
 
                 # -------------------------------------------------------------
@@ -1339,22 +1324,19 @@ class AttentionMixingProbeForCausalLM(
                 # 6.2.8 Store new document context in ART cache
                 # -------------------------------------------------------------
 
-                past_key_values.document_attention_mask = (
-                    new_document_attention_mask
+                past_key_values.update_retrieval_state(
+                    document_attention_mask=new_document_attention_mask,
+                    retrieval_decision=new_decision_score,
                 )
 
-                past_key_values.retrieval_decision = (
-                    new_decision_score
-                )
+                # # Update local references as well.
+                # document_attention_mask = (
+                #     new_document_attention_mask
+                # )
 
-                # Update local references as well.
-                document_attention_mask = (
-                    new_document_attention_mask
-                )
-
-                retrieval_decision = (
-                    new_decision_score
-                )
+                # retrieval_decision = (
+                #     new_decision_score
+                # )
 
         # =====================================================================
         # 7. Logits
@@ -1374,10 +1356,252 @@ class AttentionMixingProbeForCausalLM(
         # 8. Return
         # =====================================================================
 
+        past_key_values.attention_mask = attention_mask
+
         return CausalLMOutputWithPast(
             loss=None,
             logits=logits,
             past_key_values=past_key_values,
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
+        )
+
+    def forward_training(
+        self,
+        question: str | None = None,
+        question_input_ids: torch.LongTensor | None = None,
+        answer_input_ids: torch.LongTensor | None = None,
+        attention_mask: torch.Tensor | None = None,
+        position_ids: torch.LongTensor | None = None,
+        past_key_values: Cache | None = None,
+        inputs_embeds: torch.FloatTensor | None = None,
+        labels: torch.LongTensor | None = None,
+        logits_to_keep: int | torch.Tensor = 0,
+        **kwargs: Unpack[TransformersKwargs],
+    ) -> CausalLMOutputWithPast:
+
+        # ============================================================
+        # 1. Collect trajectory
+        # ============================================================
+
+        self.gradient_checkpointing_disable()
+
+        with torch.no_grad():
+
+            collect_outputs = self.forward_collect(
+                question=question,
+                question_input_ids=question_input_ids,
+                answer_input_ids=answer_input_ids,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                past_key_values=past_key_values,
+                inputs_embeds=inputs_embeds,
+                labels=labels,
+                logits_to_keep=logits_to_keep,
+                **kwargs,
+            )
+
+        trajectory = collect_outputs["trajectory"]
+        labels = collect_outputs["labels"]
+        self.retrieval_count_for_logging.append(
+            self.retrieval_count
+        )
+
+        # ============================================================
+        # 2. Enable gradient checkpointing
+        # ============================================================
+
+        self.gradient_checkpointing_enable()
+
+        # ============================================================
+        # 3. Replay trajectory with gradient
+        # ============================================================
+
+        logits_buffer = []
+
+            # Number of tokens for which logits have already been collected.
+        computed_logits_length = 0
+
+        # Retrieval decision from the previous trajectory step.
+        decision_score = None
+
+        # Sum of all retrieval decision scores.
+        total_decision_score = None
+
+        for item in trajectory:
+
+            # --------------------------------------------------------
+            # 3.1 Accumulate previous decision score
+            # --------------------------------------------------------
+
+            if decision_score is not None:
+
+                if total_decision_score is None:
+                    total_decision_score = decision_score
+                else:
+                    total_decision_score = (
+                        total_decision_score
+                        + decision_score
+                    )
+
+            # --------------------------------------------------------
+            # 3.2 Get trajectory state
+            # --------------------------------------------------------
+
+            input_ids = item["input_ids"]
+            attention_mask = item["attention_mask"]
+            document_attention_mask = (
+                item["document_attention_mask"]
+            )
+
+            # --------------------------------------------------------
+            # 3.3 Skip decision-only trajectory state
+            # --------------------------------------------------------
+
+            if (
+                input_ids is None
+                or attention_mask is None
+                or document_attention_mask is None
+            ):
+                continue
+
+            # --------------------------------------------------------
+            # 3.4 Forward model
+            # --------------------------------------------------------
+
+            outputs: BaseModelOutputWithPast = self.model(
+                input_ids=input_ids,
+                attention_mask=attention_mask,
+                position_ids=position_ids,
+                inputs_embeds=inputs_embeds,
+                past_key_values=None,
+                use_cache=False,
+                document_attention_mask=(
+                    document_attention_mask
+                ),
+                retrieval_decision=decision_score,
+                **kwargs,
+            )
+
+            hidden_states = outputs.last_hidden_state
+
+            # --------------------------------------------------------
+            # 3.5 Get logits for newly computed tokens only
+            # --------------------------------------------------------
+
+            current_sequence_length = (
+                hidden_states.shape[1]
+            )
+
+            new_hidden_states = hidden_states[
+                :,
+                computed_logits_length:current_sequence_length,
+                :,
+            ]
+
+            new_logits = self.lm_head(
+                new_hidden_states
+            )
+
+            logits_buffer.append(new_logits)
+
+            computed_logits_length = (
+                current_sequence_length
+            )
+
+            # --------------------------------------------------------
+            # 3.6 Compute new retrieval decision
+            # --------------------------------------------------------
+
+            decision_score = (
+                self.retrieval_decision_head(
+                hidden_states
+                )
+            )
+
+        # ============================================================
+        # 4. Accumulate final decision score
+        #
+        # If the last trajectory item is decision-only,
+        # its decision score has not been accumulated by
+        # the loop body, so add it here.
+        # ============================================================
+
+        if trajectory:
+
+            last_item = trajectory[-1]
+
+            if (
+                last_item["input_ids"] is None
+                or last_item["attention_mask"] is None
+                or last_item["document_attention_mask"] is None
+            ):
+
+                if decision_score is not None:
+
+                    if total_decision_score is None:
+                        total_decision_score = decision_score
+                    else:
+                        total_decision_score = (
+                            total_decision_score
+                            + decision_score
+                        )
+
+        # ============================================================
+        # 5. Combine logits
+        # ============================================================
+
+        if not logits_buffer:
+            raise ValueError(
+                "Trajectory does not contain any valid "
+                "states for training."
+            )
+
+        logits = torch.cat(
+            logits_buffer,
+            dim=1,
+        )
+
+        assert logits.shape[1] == labels.shape[1], (
+            "Logits and labels must have the same sequence length: "
+            f"logits.shape={logits.shape}, "
+            f"labels.shape={labels.shape}"
+        )
+
+
+        # ============================================================
+        # 6. Handle empty retrieval cost
+        # ============================================================
+
+        if total_decision_score is None:
+            total_decision_score = logits.new_zeros(())
+
+        # ============================================================
+        # 7. Compute language modeling loss
+        # ============================================================
+
+        lm_loss = self.compute_loss(
+            labels=labels,
+            logits=logits,
+        )
+
+        # ============================================================
+        # 8. Add retrieval cost
+        # ============================================================
+
+        loss = (
+            lm_loss
+            + RETRIEVAL_COST * total_decision_score
+        )
+
+        # ============================================================
+        # 9. Return
+        # ============================================================
+
+        return CausalLMOutputWithPast(
+            loss=loss,
+            logits=logits,
+            past_key_values=None,
+            hidden_states=None,
+            attentions=None,
         )

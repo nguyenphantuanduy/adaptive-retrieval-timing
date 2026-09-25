@@ -36,17 +36,20 @@ OUTPUT_DIR = "./art-training-output"
 
 SEED = 42
 
+
 # ------------------------------------------------------------
 # Training epochs
 # ------------------------------------------------------------
 
 NUM_TRAIN_EPOCHS = 0.1
 
+
 # ------------------------------------------------------------
 # Percentage of decoder layers to unfreeze
 # ------------------------------------------------------------
 
 UNFREEZE_LAST_LAYER_PERCENTAGE = 0.40
+
 
 # ------------------------------------------------------------
 # Batch
@@ -55,6 +58,7 @@ UNFREEZE_LAST_LAYER_PERCENTAGE = 0.40
 PER_DEVICE_TRAIN_BATCH_SIZE = 1
 
 GRADIENT_ACCUMULATION_STEPS = 16
+
 
 # ------------------------------------------------------------
 # Optimization
@@ -66,11 +70,13 @@ WEIGHT_DECAY = 0.0
 
 MAX_GRAD_NORM = 1.0
 
+
 # ------------------------------------------------------------
 # Logging
 # ------------------------------------------------------------
 
 LOGGING_STEPS = 1
+
 
 # ------------------------------------------------------------
 # Saving
@@ -78,17 +84,30 @@ LOGGING_STEPS = 1
 
 SAVE_STEPS = 500
 
+
 # ------------------------------------------------------------
 # Precision
 # ------------------------------------------------------------
 
 BF16 = True
 
+
 # ------------------------------------------------------------
-# ART training currently relies on KV cache.
+# Gradient checkpointing
+#
+# During forward_training():
+#
+#   forward_collect()
+#       -> temporarily disables checkpointing
+#
+#   trajectory replay
+#       -> enables checkpointing
+#
+# Therefore Trainer-level gradient checkpointing can stay enabled.
 # ------------------------------------------------------------
 
-GRADIENT_CHECKPOINTING = False
+GRADIENT_CHECKPOINTING = True
+
 
 # ------------------------------------------------------------
 # Retrieval threshold
@@ -97,43 +116,6 @@ GRADIENT_CHECKPOINTING = False
 # ------------------------------------------------------------
 
 THRESHOLD = 0.4297
-
-# ------------------------------------------------------------
-# Decision head initialization
-#
-# IMPORTANT:
-#
-# We do NOT initialize the decision head at:
-#
-#     weight = 0
-#     bias   = 0
-#
-# which would produce:
-#
-#     sigmoid(0) = 0.5
-#
-# Since:
-#
-#     0.5 > THRESHOLD
-#
-# the model would retrieve very aggressively from the
-# beginning.
-#
-# Instead:
-#
-#     weight ~ N(0, 0.01)
-#
-#     bias_logit ~ N(logit(0.40), 0.03)
-#
-# Therefore the initial decision is random and centered
-# around 0.40, slightly below the retrieval threshold.
-# ------------------------------------------------------------
-
-DECISION_INIT_MEAN = 0.40
-
-DECISION_INIT_STD = 0.03
-
-DECISION_WEIGHT_STD = 0.01
 
 
 # ============================================================
@@ -162,221 +144,6 @@ def set_seed(seed: int) -> None:
     if torch.cuda.is_available():
         torch.cuda.manual_seed(seed)
         torch.cuda.manual_seed_all(seed)
-
-
-# ============================================================
-# DECISION HEAD INITIALIZATION
-# ============================================================
-
-def get_logit_from_probability(
-    probability: float,
-) -> float:
-    """
-    Convert a probability into its corresponding logit.
-
-    logit(p) = log(p / (1 - p))
-    """
-
-    if not 0.0 < probability < 1.0:
-
-        raise ValueError(
-            "Probability must be strictly between 0 and 1."
-        )
-
-    return math.log(
-        probability
-        / (1.0 - probability)
-    )
-
-
-def initialize_decision_head(model) -> None:
-    """
-    Randomly initialize the retrieval decision head.
-
-    Weight:
-        N(0, DECISION_WEIGHT_STD)
-
-    Bias:
-        N(
-            logit(DECISION_INIT_MEAN),
-            DECISION_INIT_STD
-        )
-
-    The resulting decision scores are therefore random
-    rather than being identically 0.5.
-
-    The bias is centered around decision ~= 0.40,
-    which is below THRESHOLD = 0.4297.
-    """
-
-    print()
-    print("=" * 80)
-    print("INITIALIZING RETRIEVAL DECISION HEAD")
-    print("=" * 80)
-
-    projection = (
-        model.retrieval_decision_head
-        .projection
-    )
-
-    # --------------------------------------------------------
-    # Calculate the logit corresponding to the desired
-    # initial decision probability.
-    # --------------------------------------------------------
-
-    initial_bias_mean = get_logit_from_probability(
-        DECISION_INIT_MEAN
-    )
-
-    # --------------------------------------------------------
-    # Random initialization.
-    #
-    # This is deliberately NOT zero initialization.
-    # --------------------------------------------------------
-
-    with torch.no_grad():
-
-        projection.weight.normal_(
-            mean=0.0,
-            std=DECISION_WEIGHT_STD,
-        )
-
-        projection.bias.normal_(
-            mean=initial_bias_mean,
-            std=DECISION_INIT_STD,
-        )
-
-    # --------------------------------------------------------
-    # Read initialized values.
-    # --------------------------------------------------------
-
-    weight = projection.weight
-
-    bias = projection.bias
-
-    weight_mean = (
-        weight.detach()
-        .float()
-        .mean()
-        .item()
-    )
-
-    weight_std = (
-        weight.detach()
-        .float()
-        .std()
-        .item()
-    )
-
-    weight_abs_mean = (
-        weight.detach()
-        .float()
-        .abs()
-        .mean()
-        .item()
-    )
-
-    bias_value = (
-        bias.detach()
-        .float()
-        .item()
-    )
-
-    bias_probability = (
-        torch.sigmoid(
-            torch.tensor(
-                bias_value,
-                dtype=torch.float32,
-            )
-        )
-        .item()
-    )
-
-    print(
-        f"Decision mean target : "
-        f"{DECISION_INIT_MEAN:.6f}"
-    )
-
-    print(
-        f"Decision std target  : "
-        f"{DECISION_INIT_STD:.6f}"
-    )
-
-    print(
-        f"Weight std target    : "
-        f"{DECISION_WEIGHT_STD:.6f}"
-    )
-
-    print(
-        f"Initial bias mean    : "
-        f"{initial_bias_mean:+.6f}"
-    )
-
-    print(
-        f"Weight mean          : "
-        f"{weight_mean:+.6e}"
-    )
-
-    print(
-        f"Weight std           : "
-        f"{weight_std:.6e}"
-    )
-
-    print(
-        f"Weight abs mean      : "
-        f"{weight_abs_mean:.6e}"
-    )
-
-    print(
-        f"Bias                 : "
-        f"{bias_value:+.6f}"
-    )
-
-    print(
-        f"Zero-hidden decision : "
-        f"{bias_probability:.6f}"
-    )
-
-    print(
-        f"Retrieval threshold  : "
-        f"{THRESHOLD:.6f}"
-    )
-
-    print()
-
-    if bias_probability < THRESHOLD:
-
-        print(
-            "✓ Initial zero-hidden decision is below "
-            "the retrieval threshold."
-        )
-
-    else:
-
-        print(
-            "⚠ WARNING: Initial zero-hidden decision "
-            "is above the retrieval threshold."
-        )
-
-    print()
-
-    if (
-        weight_std > 0.0
-        and weight_abs_mean > 0.0
-    ):
-
-        print(
-            "✓ Decision head weights are randomly initialized."
-        )
-
-    else:
-
-        print(
-            "⚠ WARNING: Decision head weights appear "
-            "to be zero."
-        )
-
-    print("=" * 80)
 
 
 # ============================================================
@@ -767,219 +534,6 @@ class ARTDataCollator:
 
 
 # ============================================================
-# VERIFY DECISION HEAD
-# ============================================================
-
-def verify_decision_head(model) -> None:
-    """
-    Verify the randomly initialized retrieval decision head.
-
-    Unlike the previous version, this function does NOT expect
-    zero weights or zero bias.
-
-    It checks that:
-
-        1. weights are non-zero
-        2. bias is finite
-        3. zero-hidden decision is below the threshold
-        4. actual decision is finite
-    """
-
-    print()
-    print("=" * 80)
-    print("VERIFYING RETRIEVAL DECISION HEAD")
-    print("=" * 80)
-
-    weight = (
-        model.retrieval_decision_head
-        .projection
-        .weight
-    )
-
-    bias = (
-        model.retrieval_decision_head
-        .projection
-        .bias
-    )
-
-    weight_mean = (
-        weight.detach()
-        .float()
-        .mean()
-        .item()
-    )
-
-    weight_abs_mean = (
-        weight.detach()
-        .float()
-        .abs()
-        .mean()
-        .item()
-    )
-
-    weight_std = (
-        weight.detach()
-        .float()
-        .std()
-        .item()
-    )
-
-    bias_value = (
-        bias.detach()
-        .float()
-        .item()
-    )
-
-    zero_hidden_score = torch.sigmoid(
-        torch.tensor(
-            bias_value,
-            dtype=torch.float32,
-        )
-    ).item()
-
-    print(
-        f"Weight mean     : "
-        f"{weight_mean:+.6e}"
-    )
-
-    print(
-        f"Weight abs mean : "
-        f"{weight_abs_mean:.6e}"
-    )
-
-    print(
-        f"Weight std      : "
-        f"{weight_std:.6e}"
-    )
-
-    print(
-        f"Bias            : "
-        f"{bias_value:+.6e}"
-    )
-
-    print(
-        f"Zero-hidden score: "
-        f"{zero_hidden_score:.8f}"
-    )
-
-    print(
-        f"Threshold       : "
-        f"{THRESHOLD:.8f}"
-    )
-
-    # --------------------------------------------------------
-    # Verify actual head using zero hidden state.
-    # --------------------------------------------------------
-
-    hidden_size = model.config.hidden_size
-
-    zero_hidden = torch.zeros(
-        1,
-        1,
-        hidden_size,
-        device=weight.device,
-        dtype=weight.dtype,
-    )
-
-    with torch.no_grad():
-
-        decision_score = (
-            model.retrieval_decision_head(
-                zero_hidden
-            )
-        )
-
-    actual_score = (
-        decision_score
-        .float()
-        .cpu()
-        .item()
-    )
-
-    print(
-        f"Actual score    : "
-        f"{actual_score:.8f}"
-    )
-
-    # --------------------------------------------------------
-    # Verification.
-    # --------------------------------------------------------
-
-    weight_is_random = (
-        weight_abs_mean > 0.0
-        and weight_std > 0.0
-    )
-
-    bias_is_finite = math.isfinite(
-        bias_value
-    )
-
-    score_is_finite = math.isfinite(
-        actual_score
-    )
-
-    score_is_below_threshold = (
-        actual_score < THRESHOLD
-    )
-
-    print()
-
-    if weight_is_random:
-
-        print(
-            "✓ Decision head weight is non-zero "
-            "and randomly initialized."
-        )
-
-    else:
-
-        print(
-            "⚠ WARNING: Decision head weight "
-            "appears to be zero."
-        )
-
-    if bias_is_finite:
-
-        print(
-            "✓ Decision head bias is finite."
-        )
-
-    else:
-
-        print(
-            "⚠ WARNING: Decision head bias is not finite."
-        )
-
-    if score_is_finite:
-
-        print(
-            "✓ Decision score is finite."
-        )
-
-    else:
-
-        print(
-            "⚠ WARNING: Decision score is not finite."
-        )
-
-    if score_is_below_threshold:
-
-        print(
-            "✓ Initial zero-hidden decision is below "
-            "the retrieval threshold."
-        )
-
-    else:
-
-        print(
-            "⚠ WARNING: Initial zero-hidden decision is "
-            "above the retrieval threshold."
-        )
-
-    print("=" * 80)
-
-
-# ============================================================
 # FREEZE BACKBONE
 # ============================================================
 
@@ -999,8 +553,8 @@ def freeze_backbone(model) -> None:
 
     Everything else is frozen.
 
-    Gradient checkpointing is disabled because ART training
-    relies on KV cache.
+    Gradient checkpointing is enabled during the
+    gradient-based trajectory replay.
     """
 
     print()
@@ -1479,29 +1033,68 @@ def main():
     )
 
     # ========================================================
-    # 9. RANDOMIZE DECISION HEAD
+    # 9. VERIFY LOADED DECISION HEAD
     # ========================================================
 
     print()
-    print("8. Randomly initializing decision head...")
+    print("=" * 80)
+    print("VERIFYING LOADED RETRIEVAL DECISION HEAD")
+    print("=" * 80)
 
-    initialize_decision_head(model)
+    decision_projection = (
+        model.retrieval_decision_head.projection
+    )
+
+    decision_weight = (
+        decision_projection.weight.detach()
+        .float()
+    )
+
+    decision_bias = (
+        decision_projection.bias.detach()
+        .float()
+    )
+
+    print(
+        f"Weight abs mean : "
+        f"{decision_weight.abs().mean().item():.6e}"
+    )
+
+    print(
+        f"Weight std      : "
+        f"{decision_weight.std().item():.6e}"
+    )
+
+    print(
+        f"Bias            : "
+        f"{decision_bias.item():+.6e}"
+    )
+
+    initial_decision_score = (
+        torch.sigmoid(
+            decision_bias
+        )
+        .item()
+    )
+
+    print(
+        f"Zero-hidden score: "
+        f"{initial_decision_score:.8f}"
+    )
+
+    print(
+        f"Threshold       : "
+        f"{THRESHOLD:.8f}"
+    )
+
+    print("=" * 80)
 
     # ========================================================
-    # 10. VERIFY DECISION HEAD
+    # 10. ART TRAINING MODE
     # ========================================================
 
     print()
-    print("9. Verifying decision head...")
-
-    verify_decision_head(model)
-
-    # ========================================================
-    # 11. ART TRAINING MODE
-    # ========================================================
-
-    print()
-    print("10. Enabling ART training mode...")
+    print("8. Enabling ART training mode...")
 
     model.enable_training_mode()
 
@@ -1511,7 +1104,7 @@ def main():
     )
 
     # ========================================================
-    # 12. DISABLE GRADIENT CHECKPOINTING
+    # 11. ENABLE GRADIENT CHECKPOINTING
     # ========================================================
 
     print()
@@ -1519,18 +1112,55 @@ def main():
     print("CONFIGURING GRADIENT CHECKPOINTING / CACHE")
     print("=" * 80)
 
-    if hasattr(
-        model,
-        "gradient_checkpointing_disable",
-    ):
+    if GRADIENT_CHECKPOINTING:
 
-        model.gradient_checkpointing_disable()
+        if not hasattr(
+            model,
+            "gradient_checkpointing_enable",
+        ):
+
+            raise RuntimeError(
+                "Model does not support "
+                "gradient checkpointing."
+            )
+
+        model.gradient_checkpointing_enable()
+
+        print(
+            "Gradient checkpointing: ENABLED"
+        )
+
+    else:
+
+        if hasattr(
+            model,
+            "gradient_checkpointing_disable",
+        ):
+
+            model.gradient_checkpointing_disable()
+
+        print(
+            "Gradient checkpointing: DISABLED"
+        )
+
+    # --------------------------------------------------------
+    # ART training uses:
+    #
+    #   collect:
+    #       gradient checkpointing OFF
+    #       no_grad()
+    #
+    #   replay:
+    #       gradient checkpointing ON
+    #       use_cache=False
+    #
+    # Therefore use_cache must remain enabled at the
+    # model/config level for ART generation/collection,
+    # while forward_training() explicitly controls the
+    # replay forward with use_cache=False.
+    # --------------------------------------------------------
 
     model.config.use_cache = True
-
-    print(
-        "Gradient checkpointing: DISABLED"
-    )
 
     print(
         f"model.config.use_cache: "
@@ -1540,22 +1170,22 @@ def main():
     print("=" * 80)
 
     # ========================================================
-    # 13. FREEZE / UNFREEZE
+    # 12. FREEZE / UNFREEZE
     # ========================================================
 
     print()
-    print("11. Configuring trainable layers...")
+    print("9. Configuring trainable layers...")
 
     freeze_backbone(model)
 
     print_parameter_summary(model)
 
     # ========================================================
-    # 14. DATA COLLATOR
+    # 13. DATA COLLATOR
     # ========================================================
 
     print()
-    print("12. Creating data collator...")
+    print("10. Creating data collator...")
 
     data_collator = ARTDataCollator()
 
@@ -1564,11 +1194,11 @@ def main():
     )
 
     # ========================================================
-    # 15. TRAINING ARGUMENTS
+    # 14. TRAINING ARGUMENTS
     # ========================================================
 
     print()
-    print("13. Creating TrainingArguments...")
+    print("11. Creating TrainingArguments...")
 
     if BF16:
 
@@ -1630,7 +1260,7 @@ def main():
         fp16=False,
 
         # ----------------------------------------------------
-        # ART cache compatibility
+        # Gradient checkpointing
         # ----------------------------------------------------
 
         gradient_checkpointing=(
@@ -1638,7 +1268,7 @@ def main():
         ),
 
         # ----------------------------------------------------
-        # Custom ART forward arguments
+        # ART cache compatibility
         # ----------------------------------------------------
 
         remove_unused_columns=False,
@@ -1726,31 +1356,16 @@ def main():
     )
 
     print(
-        f"Decision init mean: "
-        f"{DECISION_INIT_MEAN}"
-    )
-
-    print(
-        f"Decision init std: "
-        f"{DECISION_INIT_STD}"
-    )
-
-    print(
-        f"Decision weight std: "
-        f"{DECISION_WEIGHT_STD}"
-    )
-
-    print(
         f"Decision threshold: "
         f"{THRESHOLD}"
     )
 
     # ========================================================
-    # 16. TRAINER
+    # 15. TRAINER
     # ========================================================
 
     print()
-    print("14. Creating ART Trainer...")
+    print("12. Creating ART Trainer...")
 
     trainer = ARTTrainer(
         model=model,
@@ -1776,7 +1391,7 @@ def main():
     )
 
     # ========================================================
-    # 17. MEMORY BEFORE TRAINING
+    # 16. MEMORY BEFORE TRAINING
     # ========================================================
 
     if torch.cuda.is_available():
@@ -1788,18 +1403,18 @@ def main():
         )
 
     # ========================================================
-    # 18. TRAIN
+    # 17. TRAIN
     # ========================================================
 
     print()
     print("=" * 80)
-    print("15. START TRAINING")
+    print("13. START TRAINING")
     print("=" * 80)
 
     train_result = trainer.train()
 
     # ========================================================
-    # 19. TRAINING RESULT
+    # 18. TRAINING RESULT
     # ========================================================
 
     print()
@@ -1820,7 +1435,7 @@ def main():
     print("=" * 80)
 
     # ========================================================
-    # 20. MEMORY AFTER TRAINING
+    # 19. MEMORY AFTER TRAINING
     # ========================================================
 
     if torch.cuda.is_available():
@@ -1830,11 +1445,11 @@ def main():
         )
 
     # ========================================================
-    # 21. FINAL DECISION HEAD
+    # 20. FINAL DECISION HEAD
     # ========================================================
 
     print()
-    print("16. Checking final decision head...")
+    print("14. Checking final decision head...")
 
     weight = (
         model.retrieval_decision_head
@@ -1903,7 +1518,7 @@ def main():
     print("=" * 80)
 
     # ========================================================
-    # 22. ART STATE
+    # 21. ART STATE
     # ========================================================
 
     print()
@@ -1984,7 +1599,7 @@ def main():
     print("=" * 80)
 
     # ========================================================
-    # 23. SAVE FINAL MODEL
+    # 22. SAVE FINAL MODEL
     # ========================================================
 
     print()
@@ -2008,7 +1623,7 @@ def main():
     print("=" * 80)
 
     # ========================================================
-    # 24. CLEANUP
+    # 23. CLEANUP
     # ========================================================
 
     print()

@@ -2,7 +2,6 @@ import torch
 from transformers import (
     Cache,
     DynamicCache,
-    AutoTokenizer,
 )
 
 from .retrieval_context_processor import (
@@ -39,15 +38,14 @@ class ARTCache(Cache):
     fallback query. It is NOT concatenated with
     generated sentences.
 
-    The tokenizer is fixed to Qwen2.5-3B-Instruct because
-    ART v1 is designed specifically for this backbone.
+    The tokenizer is provided externally and shared with
+    the retrieval-context processor.
     """
-
-    MODEL_NAME = "Qwen/Qwen2.5-3B-Instruct"
 
     def __init__(
         self,
         question: str,
+        tokenizer,
         max_sentences: int = 3,
         language: str = "en",
         ddp_cache_data=None,
@@ -62,14 +60,7 @@ class ARTCache(Cache):
         self.question = question
         self.max_sentences = max_sentences
         self.language = language
-
-        # ====================================================
-        # TOKENIZER
-        # ====================================================
-
-        self.tokenizer = AutoTokenizer.from_pretrained(
-            self.MODEL_NAME
-        )
+        self.tokenizer = tokenizer
 
         # ====================================================
         # WITH DOCUMENT
@@ -108,6 +99,7 @@ class ARTCache(Cache):
 
         self.document_attention_mask = None
         self.retrieval_decision = None
+        self.attention_mask = None
 
     # ========================================================
     # CORE HF CACHE API
@@ -194,6 +186,44 @@ class ARTCache(Cache):
     # UTIL
     # ========================================================
 
+    def update_retrieval_state(
+        self,
+        document_attention_mask,
+        retrieval_decision,
+    ) -> None:
+        """
+        Update the retrieval-related states and synchronize
+        the document-free KV cache with the document-aware
+        KV cache.
+
+        The document-free cache becomes an independent copy
+        of the current document-aware cache.
+        """
+
+        self.document_attention_mask = (
+            document_attention_mask
+        )
+
+        self.retrieval_decision = (
+            retrieval_decision
+        )
+
+        self.synchronize_cache()
+
+    def synchronize_cache(self) -> None:
+        """
+        Synchronize the document-free KV cache with the
+        current document-aware KV cache.
+
+        The document-free cache becomes an independent copy
+        of the current document-aware cache.
+        """
+
+        copy_dynamic_cache(
+            source_cache=self.cache_with_doc,
+            destination_cache=self.cache_without_doc,
+        )
+
     def reset(self):
         """
         Clear both KV cache branches and reset the
@@ -250,3 +280,29 @@ class ARTCache(Cache):
         """
 
         return self.cache_with_doc.layers
+
+
+def copy_dynamic_cache(
+    source_cache: DynamicCache,
+    destination_cache: DynamicCache,
+) -> None:
+    """
+    Reset the destination DynamicCache and copy the complete
+    KV state from the source DynamicCache.
+
+    The copied key/value tensors are cloned, so source and
+    destination do not share tensor storage.
+    """
+
+    destination_cache.reset()
+
+    for source_layer, destination_layer in zip(
+        source_cache.layers,
+        destination_cache.layers,
+    ):
+        if not source_layer.is_initialized:
+            continue
+
+        destination_layer.keys = source_layer.keys.clone()
+        destination_layer.values = source_layer.values.clone()
+        destination_layer.is_initialized = True

@@ -16,6 +16,11 @@ The custom ART demo model may contain additional parameters, such as:
 
 Those additional parameters are intentionally excluded from the compatibility
 check and weight transfer from Qwen. Their initialized values are preserved.
+
+The ART retrieval decision head is explicitly initialized with zero weights
+and zero bias so that its initial decision score is:
+
+    sigmoid(0) = 0.5
 """
 
 from __future__ import annotations
@@ -60,7 +65,9 @@ def print_names(
         print(f"  - {name}")
 
     if len(names) > 30:
-        print(f"  ... and {len(names) - 30} more")
+        print(
+            f"  ... and {len(names) - 30} more"
+        )
 
 
 def verify_qwen_compatibility(
@@ -213,6 +220,57 @@ def verify_transferred_values(
 
 
 # =============================================================================
+# ART initialization
+# =============================================================================
+
+def initialize_retrieval_decision_head(
+    demo,
+) -> None:
+    """
+    Initialize the ART retrieval decision head to produce
+    an initial decision score of exactly 0.5.
+
+    For:
+
+        logits = W h + b
+
+    zero-initializing both W and b gives:
+
+        logits = 0
+
+    and therefore:
+
+        sigmoid(0) = 0.5
+    """
+
+    print(
+        "\nInitializing ART retrieval decision head..."
+    )
+
+    with torch.no_grad():
+
+        torch.nn.init.zeros_(
+            demo.retrieval_decision_head.projection.weight
+        )
+
+        torch.nn.init.zeros_(
+            demo.retrieval_decision_head.projection.bias
+        )
+
+    print(
+        "   Projection weights initialized to zero."
+    )
+
+    print(
+        "   Projection bias initialized to zero."
+    )
+
+    print(
+        "   Initial retrieval decision score: 0.5"
+    )
+
+
+# =============================================================================
 # Custom source export
 # =============================================================================
 
@@ -288,6 +346,14 @@ def main() -> None:
     print(
         f"   Demo dtype: "
         f"{demo.model.embed_tokens.weight.dtype}"
+    )
+
+    # =========================================================================
+    # 1.1 Initialize ART retrieval decision head
+    # =========================================================================
+
+    initialize_retrieval_decision_head(
+        demo=demo,
     )
 
     # =========================================================================
@@ -394,6 +460,46 @@ def main() -> None:
     )
 
     # =========================================================================
+    # 5.1 Verify ART decision head initialization
+    # =========================================================================
+
+    print(
+        "\n5.1 Verifying ART retrieval decision head "
+        "initialization..."
+    )
+
+    decision_head = (
+        demo.retrieval_decision_head.projection
+    )
+
+    assert torch.count_nonzero(
+        decision_head.weight
+    ).item() == 0, (
+        "Retrieval decision head weight was not "
+        "initialized to zero."
+    )
+
+    assert torch.count_nonzero(
+        decision_head.bias
+    ).item() == 0, (
+        "Retrieval decision head bias was not "
+        "initialized to zero."
+    )
+
+    print(
+        "   Retrieval decision head weights: all zero."
+    )
+
+    print(
+        "   Retrieval decision head bias: all zero."
+    )
+
+    print(
+        "   Initial decision score: "
+        f"{torch.sigmoid(decision_head.bias).item():.4f}"
+    )
+
+    # =========================================================================
     # 6. Report ART-specific parameters
     # =========================================================================
 
@@ -402,7 +508,7 @@ def main() -> None:
     )
 
     print(
-        "\nART demo-specific parameters:"
+        "\n6. ART demo-specific parameters:"
     )
 
     for name in additional_keys:
@@ -415,7 +521,7 @@ def main() -> None:
     # =========================================================================
 
     print(
-        "\n6. Freeing original Qwen model..."
+        "\n7. Freeing original Qwen model..."
     )
 
     del qwen
@@ -430,7 +536,7 @@ def main() -> None:
     # =========================================================================
 
     print(
-        "\n7. Saving model weights and custom source "
+        "\n8. Saving model weights and custom source "
         "into a temporary publish directory..."
     )
 
@@ -468,7 +574,7 @@ def main() -> None:
         # =====================================================================
 
         print(
-            f"\n8. Uploading and overwriting "
+            f"\n9. Uploading and overwriting "
             f"{TARGET_REPO}..."
         )
 
