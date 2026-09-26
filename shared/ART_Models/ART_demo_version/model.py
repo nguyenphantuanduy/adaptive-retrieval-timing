@@ -60,8 +60,10 @@ def flip_coin(probability: float = 0.1) -> bool:
 def increase_probability(probability: float) -> float:
     return min(probability + 0.05, MAX_EXPLORATION_PROBABILITY)
 
-def decrease_probability(probability: float) -> float:
-    return max(probability - 0.2, MIN_EXPLORATION_PROBABILITY)
+def decrease_probability(
+    probability: float,
+) -> float:
+    return MIN_EXPLORATION_PROBABILITY
 
 class AttentionMixingProbePreTrainedModel(Qwen2PreTrainedModel):
     _no_split_modules = [
