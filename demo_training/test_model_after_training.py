@@ -17,8 +17,7 @@ TOKENIZER_PATH = "./art-training-output"
 DTYPE = torch.bfloat16
 
 QUESTION = (
-    "Who was the person that started the Bethel branch of the religion "
-    "founded by the black community in the former US capital?"
+    "When was the institute that owned The Collegian founded?"
 )
 
 SYSTEM_PROMPT = """You are a helpful assistant that can solve the given question step by step.
