@@ -13,7 +13,7 @@ from transformers import (
     AutoModelForCausalLM,
 )
 
-from trainer import ARTTrainer
+from demo_training.trainer import ARTTrainer
 
 
 # ============================================================
@@ -41,7 +41,7 @@ SEED = 42
 # Training epochs
 # ------------------------------------------------------------
 
-NUM_TRAIN_EPOCHS = 0.1
+NUM_TRAIN_EPOCHS = 1
 
 
 # ------------------------------------------------------------
@@ -57,7 +57,7 @@ UNFREEZE_LAST_LAYER_PERCENTAGE = 0.40
 
 PER_DEVICE_TRAIN_BATCH_SIZE = 1
 
-GRADIENT_ACCUMULATION_STEPS = 16
+GRADIENT_ACCUMULATION_STEPS = 32
 
 
 # ------------------------------------------------------------
@@ -82,7 +82,7 @@ LOGGING_STEPS = 1
 # Saving
 # ------------------------------------------------------------
 
-SAVE_STEPS = 500
+SAVE_STEPS = 100
 
 
 # ------------------------------------------------------------

@@ -48,6 +48,20 @@ THRESHOLD = 0.4297
 RETRIEVAL_COST = 0.095349
 MAX_RETRIEVAL_CONTEXT_TOKENS = 500
 MAX_RETRIEVAL_COUNT = 4
+MAX_EXPLORATION_PROBABILITY = 0.5
+MIN_EXPLORATION_PROBABILITY = 0.1
+
+import random
+
+
+def flip_coin(probability: float = 0.1) -> bool:
+    return random.random() < probability
+
+def increase_probability(probability: float) -> float:
+    return min(probability + 0.05, MAX_EXPLORATION_PROBABILITY)
+
+def decrease_probability(probability: float) -> float:
+    return max(probability - 0.2, MIN_EXPLORATION_PROBABILITY)
 
 class AttentionMixingProbePreTrainedModel(Qwen2PreTrainedModel):
     _no_split_modules = [
@@ -351,10 +365,10 @@ class AttentionMixingProbeForCausalLM(
     def _append_trajectory_step(
         self,
         trajectory: list[dict],
-        input_ids: torch.LongTensor | None,
-        attention_mask: torch.Tensor | None,
-        document_attention_mask: torch.Tensor | None,
-        retrieval_decision: torch.Tensor | None,
+        input_ids: torch.LongTensor | None = None,
+        attention_mask: torch.Tensor | None = None,
+        document_attention_mask: torch.Tensor | None = None,
+        retrieval_decision: torch.Tensor | None = None,
     ) -> None:
         trajectory.append(
             {
@@ -514,6 +528,7 @@ class AttentionMixingProbeForCausalLM(
         self.retrieval_count = 0
         input_ids_buffer = None
         trajectory = []
+        probability = MIN_EXPLORATION_PROBABILITY
 
         # =====================================================================
         # 2. Initial sequence length
@@ -583,9 +598,10 @@ class AttentionMixingProbeForCausalLM(
         # =====================================================================
 
         if (
-            question_decision_score.item() >= THRESHOLD
+            ( question_decision_score.item() >= THRESHOLD or flip_coin(probability) )
             and self.retrieval_count < self.max_retrievals
         ):
+            probability = decrease_probability(probability)
             
             self._append_trajectory_step(
                 trajectory=trajectory,
@@ -701,6 +717,9 @@ class AttentionMixingProbeForCausalLM(
             decision_score = new_decision_score
             past_key_values.synchronize_cache()
 
+        else:
+            probability = increase_probability(probability)
+
         # =====================================================================
         # 7. Forward ANSWER ONLINE, SENTENCE BY SENTENCE
         # =====================================================================
@@ -810,9 +829,10 @@ class AttentionMixingProbeForCausalLM(
             # -----------------------------------------------------------------
 
             if (
-                new_decision_score.item() >= THRESHOLD
+                ( new_decision_score.item() >= THRESHOLD or flip_coin(probability) )
                 and self.retrieval_count < self.max_retrievals
             ):
+                probability = decrease_probability(probability)
 
                 self._append_trajectory_step(
                     trajectory=trajectory,
@@ -947,6 +967,9 @@ class AttentionMixingProbeForCausalLM(
                 document_attention_mask = new_document_attention_mask
                 past_key_values.synchronize_cache()
 
+            else:
+                probability = increase_probability(probability)
+
             # -----------------------------------------------------------------
             # If no retrieval:
             #
@@ -1037,7 +1060,7 @@ class AttentionMixingProbeForCausalLM(
             )
 
             if (
-                new_decision_score.item() >= THRESHOLD
+                ( new_decision_score.item() >= THRESHOLD or flip_coin(probability) )
                 and self.retrieval_count < self.max_retrievals
             ):
                 self._append_trajectory_step(
@@ -1217,7 +1240,7 @@ class AttentionMixingProbeForCausalLM(
             # -----------------------------------------------------------------
 
             if (
-                new_decision_score.item() >= THRESHOLD
+                ( new_decision_score.item() >= THRESHOLD )
                 and self.retrieval_count < self.max_retrievals
             ):
 
@@ -1465,7 +1488,6 @@ class AttentionMixingProbeForCausalLM(
             if (
                 input_ids is None
                 or attention_mask is None
-                or document_attention_mask is None
             ):
                 continue
 
