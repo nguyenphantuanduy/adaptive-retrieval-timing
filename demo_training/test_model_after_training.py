@@ -12,7 +12,7 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 MODEL_PATH = "adaptive-retrieval-timing/ART-Demo-Qwen2.5-3B"
 
 # Tokenizer was also saved to the same directory after training.
-TOKENIZER_PATH = "./art-training-output"
+TOKENIZER_PATH = "Qwen/Qwen2.5-3B-Instruct"
 
 DTYPE = torch.bfloat16
 
