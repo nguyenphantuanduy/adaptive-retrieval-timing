@@ -61,6 +61,7 @@ class ARTCache(Cache):
         self.max_sentences = max_sentences
         self.language = language
         self.tokenizer = tokenizer
+        self.counter = 0
 
         # ====================================================
         # WITH DOCUMENT

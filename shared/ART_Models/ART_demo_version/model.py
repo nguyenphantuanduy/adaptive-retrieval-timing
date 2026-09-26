@@ -339,6 +339,8 @@ class AttentionMixingProbeForCausalLM(
         self.tokenizer = None
 
         self.retrieval_count_for_logging = []
+        self.query = []
+        self.doc = []
 
         # Initialize weights and apply final processing
         self.post_init()
@@ -1216,6 +1218,9 @@ class AttentionMixingProbeForCausalLM(
                     past_key_values.feed_token(token_id)
                 )
 
+        if sentence_completed:
+            past_key_values.counter = past_key_values.counter + 1
+
         should_decide = (
             first_token_generation
             or sentence_completed
@@ -1242,7 +1247,7 @@ class AttentionMixingProbeForCausalLM(
             # -----------------------------------------------------------------
 
             if (
-                ( new_decision_score.item() >= THRESHOLD )
+                ( new_decision_score.item() >= THRESHOLD or past_key_values.counter == 1)
                 and self.retrieval_count < self.max_retrievals
             ):
 
@@ -1253,7 +1258,7 @@ class AttentionMixingProbeForCausalLM(
                 retrieval_query = (
                     past_key_values.build_retrieval_query()
                 )
-
+                self.query.append(retrieval_query)
                 # -------------------------------------------------------------
                 # 6.2.2 Retrieve
                 # -------------------------------------------------------------
@@ -1263,6 +1268,7 @@ class AttentionMixingProbeForCausalLM(
                     max_passage_tokens=MAX_RETRIEVAL_CONTEXT_TOKENS,
                     tokenizer=self._get_tokenizer(),
                 )
+                self.doc.append(retrieval_text)
 
                 self.retrieval_count += 1
 

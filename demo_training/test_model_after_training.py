@@ -9,7 +9,7 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 # =============================================================================
 
 # Model saved after ART training.
-MODEL_PATH = "./art-training-output"
+MODEL_PATH = "adaptive-retrieval-timing/ART-Demo-Qwen2.5-3B"
 
 # Tokenizer was also saved to the same directory after training.
 TOKENIZER_PATH = "./art-training-output"
@@ -17,7 +17,7 @@ TOKENIZER_PATH = "./art-training-output"
 DTYPE = torch.bfloat16
 
 QUESTION = (
-    "When was the institute that owned The Collegian founded?"
+    "How many times did plague occur in the place where the creator of The Worship of Venus died?"
 )
 
 SYSTEM_PROMPT = """You are a helpful assistant that can solve the given question step by step.
@@ -242,7 +242,7 @@ def main() -> None:
             # Generation settings
             # -----------------------------------------------------------------
 
-            max_new_tokens=512,
+            max_new_tokens=1024,
 
             do_sample=False,
 
@@ -312,6 +312,14 @@ def main() -> None:
         print(
             f"isTraining: {model.isTraining}"
         )
+
+    print("QUERY:")
+    for i, q in enumerate(model.query):
+        print(f"[{i}] {q}")
+
+    print("\nDOC:")
+    for i, d in enumerate(model.doc):
+        print(f"[{i}] {d}")
 
     print("-" * 80)
 
