@@ -15,13 +15,17 @@ The custom ART demo model may contain additional parameters, such as:
     retrieval_decision_head.*
 
 Those additional parameters are intentionally excluded from the compatibility
-check and weight transfer from Qwen. Their initialized values are preserved.
+check and weight transfer from Qwen.
 
-The ART retrieval decision head is explicitly initialized with zero weights
-and zero bias so that its initial decision score is:
+The ART retrieval decision head is randomly initialized using the same
+initialization as PyTorch's nn.Linear:
 
-    sigmoid(0) = 0.5
+    weight -> Kaiming uniform
+    bias   -> uniform based on fan-in
+
+Therefore, the initial retrieval decision score is NOT forced to 0.5.
 """
+
 
 from __future__ import annotations
 
@@ -32,7 +36,10 @@ from pathlib import Path
 
 import torch
 from huggingface_hub import HfApi
-from transformers import AutoConfig, AutoModelForCausalLM
+from transformers import (
+    AutoConfig,
+    AutoModelForCausalLM,
+)
 
 
 # =============================================================================
@@ -57,14 +64,22 @@ def print_names(
     title: str,
     names: list[str],
 ) -> None:
-    """Print a concise diagnostic list."""
+    """
+    Print a concise diagnostic list.
+    """
 
-    print(f"{title}: {len(names)}")
+    print(
+        f"{title}: {len(names)}"
+    )
 
     for name in names[:30]:
-        print(f"  - {name}")
+
+        print(
+            f"  - {name}"
+        )
 
     if len(names) > 30:
+
         print(
             f"  ... and {len(names) - 30} more"
         )
@@ -89,6 +104,7 @@ def verify_qwen_compatibility(
     """
 
     demo_keys = set(demo_state)
+
     qwen_keys = set(qwen_state)
 
     # -------------------------------------------------------------------------
@@ -125,7 +141,8 @@ def verify_qwen_compatibility(
         demo_keys - qwen_keys
     )
 
-    print("\nState-dict compatibility report")
+    print()
+    print("State-dict compatibility report")
     print("-" * 80)
 
     print_names(
@@ -134,7 +151,8 @@ def verify_qwen_compatibility(
     )
 
     print(
-        f"Shape mismatches: {len(shape_mismatches)}"
+        f"Shape mismatches: "
+        f"{len(shape_mismatches)}"
     )
 
     for (
@@ -150,6 +168,7 @@ def verify_qwen_compatibility(
         )
 
     if len(shape_mismatches) > 30:
+
         print(
             f"  ... and "
             f"{len(shape_mismatches) - 30} more"
@@ -220,54 +239,348 @@ def verify_transferred_values(
 
 
 # =============================================================================
-# ART initialization
+# ART INITIALIZATION
 # =============================================================================
 
 def initialize_retrieval_decision_head(
     demo,
 ) -> None:
     """
-    Initialize the ART retrieval decision head to produce
-    an initial decision score of exactly 0.5.
+    Randomly initialize the ART retrieval decision head.
 
-    For:
+    The retrieval decision head computes:
 
-        logits = W h + b
+        decision_logit = weight @ hidden_state + bias
 
-    zero-initializing both W and b gives:
+        decision_score = sigmoid(decision_logit)
 
-        logits = 0
+    The projection layer is initialized using the same initialization
+    as PyTorch's nn.Linear.reset_parameters():
 
-    and therefore:
+        weight -> Kaiming uniform
+        bias   -> uniform based on fan-in
 
-        sigmoid(0) = 0.5
+    Therefore, the initial decision score is not forced to 0.5.
     """
 
+    print()
+    print("=" * 80)
+    print("INITIALIZING ART RETRIEVAL DECISION HEAD")
+    print("=" * 80)
+
+    projection = (
+        demo.retrieval_decision_head.projection
+    )
+
+    weight = projection.weight
+
+    bias = projection.bias
+
+    # =========================================================================
+    # Before initialization
+    # =========================================================================
+
+    print()
+    print("Before random initialization:")
+
     print(
-        "\nInitializing ART retrieval decision head..."
+        f"Weight mean     : "
+        f"{weight.detach().float().mean().item():+.6e}"
+    )
+
+    print(
+        f"Weight std      : "
+        f"{weight.detach().float().std().item():.6e}"
+    )
+
+    print(
+        f"Weight abs mean : "
+        f"{weight.detach().float().abs().mean().item():.6e}"
+    )
+
+    print(
+        f"Bias            : "
+        f"{bias.detach().float().item():+.6e}"
+    )
+
+    # =========================================================================
+    # Random initialization
+    #
+    # Match torch.nn.Linear.reset_parameters().
+    # =========================================================================
+
+    with torch.no_grad():
+
+        torch.nn.init.kaiming_uniform_(
+            weight,
+            a=5 ** 0.5,
+        )
+
+        fan_in, _ = (
+            torch.nn.init._calculate_fan_in_and_fan_out(
+                weight
+            )
+        )
+
+        bound = 1 / (fan_in ** 0.5)
+
+        torch.nn.init.uniform_(
+            bias,
+            -bound,
+            bound,
+        )
+
+    # =========================================================================
+    # After initialization
+    # =========================================================================
+
+    print()
+    print("After random initialization:")
+
+    print(
+        f"Weight mean     : "
+        f"{weight.detach().float().mean().item():+.6e}"
+    )
+
+    print(
+        f"Weight std      : "
+        f"{weight.detach().float().std().item():.6e}"
+    )
+
+    print(
+        f"Weight abs mean : "
+        f"{weight.detach().float().abs().mean().item():.6e}"
+    )
+
+    print(
+        f"Weight min      : "
+        f"{weight.detach().float().min().item():+.6e}"
+    )
+
+    print(
+        f"Weight max      : "
+        f"{weight.detach().float().max().item():+.6e}"
+    )
+
+    print(
+        f"Bias            : "
+        f"{bias.detach().float().item():+.6e}"
+    )
+
+    print(
+        f"Initial zero-hidden score: "
+        f"{torch.sigmoid(bias.detach().float()).item():.8f}"
+    )
+
+    print()
+    print(
+        "Initialization method:"
+    )
+
+    print(
+        "  weight = Kaiming uniform"
+    )
+
+    print(
+        "  bias   = uniform(-1/sqrt(fan_in), +1/sqrt(fan_in))"
+    )
+
+    print(
+        "  score  = sigmoid(weight @ hidden + bias)"
+    )
+
+    print("=" * 80)
+
+
+# =============================================================================
+# VERIFY RANDOM DECISION HEAD
+# =============================================================================
+
+def verify_retrieval_decision_head(
+    demo,
+) -> None:
+    """
+    Verify that the retrieval decision head is no longer zero initialized.
+
+    The verification uses random hidden states because evaluating the head
+    only on a zero hidden state would test the bias and not the weight.
+    """
+
+    print()
+    print("=" * 80)
+    print("VERIFYING RANDOM RETRIEVAL DECISION HEAD")
+    print("=" * 80)
+
+    projection = (
+        demo.retrieval_decision_head.projection
+    )
+
+    weight = projection.weight
+
+    bias = projection.bias
+
+    hidden_size = demo.config.hidden_size
+
+    # =========================================================================
+    # Weight verification
+    # =========================================================================
+
+    weight_abs_mean = (
+        weight.detach()
+        .float()
+        .abs()
+        .mean()
+        .item()
+    )
+
+    weight_std = (
+        weight.detach()
+        .float()
+        .std()
+        .item()
+    )
+
+    print()
+    print(
+        f"Weight abs mean : "
+        f"{weight_abs_mean:.6e}"
+    )
+
+    print(
+        f"Weight std      : "
+        f"{weight_std:.6e}"
+    )
+
+    if weight_abs_mean == 0.0:
+
+        raise RuntimeError(
+            "Retrieval decision head weight is still zero."
+        )
+
+    print(
+        "✓ Retrieval decision head weight is non-zero."
+    )
+
+    # =========================================================================
+    # Bias verification
+    # =========================================================================
+
+    bias_value = (
+        bias.detach()
+        .float()
+        .item()
+    )
+
+    print(
+        f"Bias            : "
+        f"{bias_value:+.6e}"
+    )
+
+    # =========================================================================
+    # Random hidden states
+    # =========================================================================
+
+    test_hidden = torch.randn(
+        8,
+        1,
+        hidden_size,
+        device=weight.device,
+        dtype=weight.dtype,
     )
 
     with torch.no_grad():
 
-        torch.nn.init.zeros_(
-            demo.retrieval_decision_head.projection.weight
+        decision_scores = (
+            demo.retrieval_decision_head(
+                test_hidden
+            )
         )
 
-        torch.nn.init.zeros_(
-            demo.retrieval_decision_head.projection.bias
+    scores = (
+        decision_scores
+        .detach()
+        .float()
+        .cpu()
+    )
+
+    print()
+    print("Decision scores on random hidden states:")
+
+    print(
+        f"Mean : "
+        f"{scores.mean().item():.8f}"
+    )
+
+    print(
+        f"Std  : "
+        f"{scores.std().item():.8f}"
+    )
+
+    print(
+        f"Min  : "
+        f"{scores.min().item():.8f}"
+    )
+
+    print(
+        f"Max  : "
+        f"{scores.max().item():.8f}"
+    )
+
+    print()
+
+    for index, score in enumerate(
+        scores.tolist()
+    ):
+
+        print(
+            f"  [{index}] "
+            f"{score:.8f}"
         )
 
+    # =========================================================================
+    # Zero hidden state
+    # =========================================================================
+
+    zero_hidden = torch.zeros(
+        1,
+        1,
+        hidden_size,
+        device=weight.device,
+        dtype=weight.dtype,
+    )
+
+    with torch.no_grad():
+
+        zero_decision_score = (
+            demo.retrieval_decision_head(
+                zero_hidden
+            )
+        )
+
+    zero_score = (
+        zero_decision_score
+        .detach()
+        .float()
+        .cpu()
+        .item()
+    )
+
+    print()
     print(
-        "   Projection weights initialized to zero."
+        f"Zero-hidden decision score: "
+        f"{zero_score:.8f}"
     )
 
     print(
-        "   Projection bias initialized to zero."
+        "This value is sigmoid(bias)."
     )
 
+    print()
     print(
-        "   Initial retrieval decision score: 0.5"
+        "✓ Retrieval decision head is randomly initialized."
     )
+
+    print("=" * 80)
 
 
 # =============================================================================
@@ -302,10 +615,12 @@ def copy_custom_code(
 def main() -> None:
 
     print("=" * 80)
+
     print(
         "INITIALIZE ART DEMO: "
         "QWEN2.5-3B-INSTRUCT"
     )
+
     print("=" * 80)
 
     print(
@@ -340,7 +655,8 @@ def main() -> None:
     )
 
     print(
-        f"   Demo class: {type(demo).__name__}"
+        f"   Demo class: "
+        f"{type(demo).__name__}"
     )
 
     print(
@@ -349,7 +665,7 @@ def main() -> None:
     )
 
     # =========================================================================
-    # 1.1 Initialize ART retrieval decision head
+    # 1.1 Randomly initialize ART retrieval decision head
     # =========================================================================
 
     initialize_retrieval_decision_head(
@@ -372,7 +688,8 @@ def main() -> None:
     )
 
     print(
-        f"   Original class: {type(qwen).__name__}"
+        f"   Original class: "
+        f"{type(qwen).__name__}"
     )
 
     print(
@@ -389,6 +706,7 @@ def main() -> None:
     )
 
     demo_state = demo.state_dict()
+
     qwen_state = qwen.state_dict()
 
     verify_qwen_compatibility(
@@ -405,25 +723,17 @@ def main() -> None:
     )
 
     # -------------------------------------------------------------------------
-    # IMPORTANT:
+    # The ART demo contains:
     #
-    # The ART demo contains all Qwen parameters PLUS ART-specific parameters.
+    #     all Qwen parameters
     #
-    # Therefore, instead of calling:
+    # plus:
     #
-    #     demo.load_state_dict(qwen_state, strict=False)
+    #     retrieval_decision_head.*
     #
-    # we merge the Qwen weights into the complete ART state dict.
+    # Therefore, merge the Qwen state dict into the complete ART state dict.
     #
-    # This preserves ART-specific parameters such as:
-    #
-    #     retrieval_decision_head.projection.weight
-    #     retrieval_decision_head.projection.bias
-    #
-    # with their initialized values.
-    #
-    # After merging, strict=True is used so that the final ART model state
-    # dict must be internally complete.
+    # This preserves the randomly initialized ART-specific parameters.
     # -------------------------------------------------------------------------
 
     merged_state = demo.state_dict()
@@ -438,20 +748,21 @@ def main() -> None:
     )
 
     print(
-        f"   Transferred {len(qwen_state)} Qwen state-dict tensors."
+        f"   Transferred "
+        f"{len(qwen_state)} Qwen state-dict tensors."
     )
 
     print(
         "   ART-specific parameters were preserved "
-        "with their initialized values."
+        "with their random initialized values."
     )
 
     # =========================================================================
-    # 5. Verify transfer result
+    # 5. Verify Qwen transfer result
     # =========================================================================
 
     print(
-        "\n5. Verifying transferred weights..."
+        "\n5. Verifying transferred Qwen weights..."
     )
 
     verify_transferred_values(
@@ -460,43 +771,15 @@ def main() -> None:
     )
 
     # =========================================================================
-    # 5.1 Verify ART decision head initialization
+    # 5.1 Verify ART decision head after Qwen transfer
     # =========================================================================
 
     print(
-        "\n5.1 Verifying ART retrieval decision head "
-        "initialization..."
+        "\n5.1 Verifying ART retrieval decision head..."
     )
 
-    decision_head = (
-        demo.retrieval_decision_head.projection
-    )
-
-    assert torch.count_nonzero(
-        decision_head.weight
-    ).item() == 0, (
-        "Retrieval decision head weight was not "
-        "initialized to zero."
-    )
-
-    assert torch.count_nonzero(
-        decision_head.bias
-    ).item() == 0, (
-        "Retrieval decision head bias was not "
-        "initialized to zero."
-    )
-
-    print(
-        "   Retrieval decision head weights: all zero."
-    )
-
-    print(
-        "   Retrieval decision head bias: all zero."
-    )
-
-    print(
-        "   Initial decision score: "
-        f"{torch.sigmoid(decision_head.bias).item():.4f}"
+    verify_retrieval_decision_head(
+        demo=demo,
     )
 
     # =========================================================================
@@ -504,7 +787,8 @@ def main() -> None:
     # =========================================================================
 
     additional_keys = sorted(
-        set(demo.state_dict()) - set(qwen_state)
+        set(demo.state_dict())
+        - set(qwen_state)
     )
 
     print(
@@ -512,6 +796,7 @@ def main() -> None:
     )
 
     for name in additional_keys:
+
         print(
             f"  - {name}"
         )
@@ -525,8 +810,11 @@ def main() -> None:
     )
 
     del qwen
+
     del qwen_state
+
     del demo_state
+
     del merged_state
 
     gc.collect()
@@ -565,6 +853,7 @@ def main() -> None:
         )
 
         for filename in saved_files:
+
             print(
                 f"   - {filename}"
             )
@@ -592,7 +881,8 @@ def main() -> None:
             folder_path=export_dir,
             commit_message=(
                 "Initialize ART demo from "
-                "Qwen2.5-3B-Instruct"
+                "Qwen2.5-3B-Instruct with random "
+                "retrieval decision head"
             ),
         )
 
@@ -613,7 +903,8 @@ def main() -> None:
     )
 
     print(
-        f"Base model: {QWEN_REPO}"
+        f"Base model: "
+        f"{QWEN_REPO}"
     )
 
     print(
@@ -622,9 +913,15 @@ def main() -> None:
     )
 
     print(
-        f"Commit: {commit}"
+        f"Commit: "
+        f"{commit}"
     )
 
 
+# =============================================================================
+# ENTRY POINT
+# =============================================================================
+
 if __name__ == "__main__":
+
     main()
