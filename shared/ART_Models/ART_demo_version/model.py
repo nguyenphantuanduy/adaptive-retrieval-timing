@@ -610,7 +610,7 @@ class AttentionMixingProbeForCausalLM(
             ( question_decision_score.item() >= THRESHOLD or flip_coin(0.1) )
             and self.retrieval_count < self.max_retrievals
         ):
-            self.first_segment_retrieval_decision_score = question_decision_score
+            self.first_segment_retrieval_decision_score = question_decision_score.item()
             self.retrieve_segment_indices.append(past_key_values.counter)
             probability = decrease_probability(probability)
             
@@ -845,7 +845,7 @@ class AttentionMixingProbeForCausalLM(
                 and self.retrieval_count < self.max_retrievals
             ):
                 if self.first_segment_retrieval_decision_score is None:
-                    self.first_segment_retrieval_decision_score = new_decision_score
+                    self.first_segment_retrieval_decision_score = new_decision_score.item()
 
                 probability = decrease_probability(probability)
 
