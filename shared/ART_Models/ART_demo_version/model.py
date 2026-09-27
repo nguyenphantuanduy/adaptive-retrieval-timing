@@ -274,14 +274,24 @@ class RetrievalDecisionHead(nn.Module):
     def __init__(self, hidden_size: int):
         super().__init__()
 
-        self.projection = nn.Linear(
-            hidden_size,
-            1,
+        self.network = nn.Sequential(
+            nn.Linear(hidden_size, hidden_size // 2),       # 2048 → 1024
+            nn.SiLU(),
+
+            nn.Linear(hidden_size // 2, hidden_size // 4), # 1024 → 512
+            nn.SiLU(),
+
+            nn.Linear(hidden_size // 4, hidden_size // 8), # 512 → 256
+            nn.SiLU(),
+
+            nn.Linear(hidden_size // 8, 1),                # 256 → 1
         )
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
-        last_hidden_state = hidden_states[:, -1, :]  # (B, H)
-        logits = self.projection(last_hidden_state)  # (B, 1)
+        last_hidden_state = hidden_states[:, -1, :]  # (B, 2048)
+
+        logits = self.network(last_hidden_state)     # (B, 1)
+
         decision = torch.sigmoid(logits).squeeze(-1) # (B,)
 
         return decision

@@ -12,7 +12,7 @@ custom ART demo model with exactly the same tensor shape.
 
 The custom ART demo model may contain additional parameters, such as:
 
-    retrieval_decision_head.*
+    retrieval_decision_head.network.*
 
 Those additional parameters are intentionally excluded from the compatibility
 check and weight transfer from Qwen.
@@ -23,7 +23,33 @@ initialization as PyTorch's nn.Linear:
     weight -> Kaiming uniform
     bias   -> uniform based on fan-in
 
-Therefore, the initial retrieval decision score is NOT forced to 0.5.
+Retrieval decision head architecture:
+
+    hidden_size
+        ↓
+    hidden_size / 2
+        ↓
+      SiLU
+        ↓
+    hidden_size / 4
+        ↓
+      SiLU
+        ↓
+    hidden_size / 8
+        ↓
+      SiLU
+        ↓
+        1
+        ↓
+     sigmoid
+
+For Qwen2.5-3B-Instruct:
+
+    hidden_size = 2048
+
+Therefore:
+
+    2048 → 1024 → 512 → 256 → 1 → sigmoid
 """
 
 
@@ -98,7 +124,7 @@ def verify_qwen_compatibility(
 
     The ART demo is allowed to contain additional parameters, such as:
 
-        retrieval_decision_head.*
+        retrieval_decision_head.network.*
 
     Those additional parameters are not required to exist in Qwen.
     """
@@ -246,21 +272,44 @@ def initialize_retrieval_decision_head(
     demo,
 ) -> None:
     """
-    Randomly initialize the ART retrieval decision head.
+    Randomly initialize the complete ART retrieval decision head.
 
-    The retrieval decision head computes:
+    Architecture:
 
-        decision_logit = weight @ hidden_state + bias
+        hidden_size
+            ↓
+        hidden_size / 2
+            ↓
+          SiLU
+            ↓
+        hidden_size / 4
+            ↓
+          SiLU
+            ↓
+        hidden_size / 8
+            ↓
+          SiLU
+            ↓
+            1
 
-        decision_score = sigmoid(decision_logit)
+    For Qwen2.5-3B:
 
-    The projection layer is initialized using the same initialization
-    as PyTorch's nn.Linear.reset_parameters():
+        2048 → 1024 → 512 → 256 → 1
+
+    Every Linear layer is initialized using the same initialization as
+    torch.nn.Linear.reset_parameters():
 
         weight -> Kaiming uniform
         bias   -> uniform based on fan-in
 
-    Therefore, the initial decision score is not forced to 0.5.
+    The SiLU layers have no trainable parameters.
+
+    The final retrieval decision score is:
+
+        decision_score = sigmoid(final_logit)
+
+    Therefore, the initial decision score is determined by the randomly
+    initialized MLP and is not forced to 0.5.
     """
 
     print()
@@ -268,13 +317,75 @@ def initialize_retrieval_decision_head(
     print("INITIALIZING ART RETRIEVAL DECISION HEAD")
     print("=" * 80)
 
-    projection = (
-        demo.retrieval_decision_head.projection
+    head = demo.retrieval_decision_head
+
+    network = head.network
+
+    # =========================================================================
+    # Report architecture
+    # =========================================================================
+
+    print()
+    print("Retrieval decision head architecture:")
+
+    print(
+        f"  Input hidden size : "
+        f"{demo.config.hidden_size}"
     )
 
-    weight = projection.weight
+    print(
+        f"  Layer 1           : "
+        f"{demo.config.hidden_size} → "
+        f"{demo.config.hidden_size // 2}"
+    )
 
-    bias = projection.bias
+    print(
+        f"  Layer 2           : "
+        f"{demo.config.hidden_size // 2} → "
+        f"{demo.config.hidden_size // 4}"
+    )
+
+    print(
+        f"  Layer 3           : "
+        f"{demo.config.hidden_size // 4} → "
+        f"{demo.config.hidden_size // 8}"
+    )
+
+    print(
+        f"  Output layer      : "
+        f"{demo.config.hidden_size // 8} → 1"
+    )
+
+    print(
+        "  Activations       : SiLU"
+    )
+
+    print(
+        "  Output activation : sigmoid"
+    )
+
+    # =========================================================================
+    # Collect Linear layers
+    # =========================================================================
+
+    linear_layers = [
+        module
+        for module in network.modules()
+        if isinstance(module, torch.nn.Linear)
+    ]
+
+    if not linear_layers:
+
+        raise RuntimeError(
+            "No nn.Linear layers were found inside "
+            "retrieval_decision_head.network."
+        )
+
+    print()
+    print(
+        f"Found {len(linear_layers)} Linear layers "
+        "inside the retrieval decision head."
+    )
 
     # =========================================================================
     # Before initialization
@@ -283,25 +394,40 @@ def initialize_retrieval_decision_head(
     print()
     print("Before random initialization:")
 
-    print(
-        f"Weight mean     : "
-        f"{weight.detach().float().mean().item():+.6e}"
-    )
+    for index, layer in enumerate(linear_layers):
 
-    print(
-        f"Weight std      : "
-        f"{weight.detach().float().std().item():.6e}"
-    )
+        print()
+        print(
+            f"Linear layer {index + 1}: "
+            f"{layer.in_features} → {layer.out_features}"
+        )
 
-    print(
-        f"Weight abs mean : "
-        f"{weight.detach().float().abs().mean().item():.6e}"
-    )
+        print(
+            f"  Weight mean     : "
+            f"{layer.weight.detach().float().mean().item():+.6e}"
+        )
 
-    print(
-        f"Bias            : "
-        f"{bias.detach().float().item():+.6e}"
-    )
+        print(
+            f"  Weight std      : "
+            f"{layer.weight.detach().float().std().item():.6e}"
+        )
+
+        print(
+            f"  Weight abs mean : "
+            f"{layer.weight.detach().float().abs().mean().item():.6e}"
+        )
+
+        if layer.bias is not None:
+
+            print(
+                f"  Bias mean       : "
+                f"{layer.bias.detach().float().mean().item():+.6e}"
+            )
+
+            print(
+                f"  Bias std        : "
+                f"{layer.bias.detach().float().std().item():.6e}"
+            )
 
     # =========================================================================
     # Random initialization
@@ -311,24 +437,28 @@ def initialize_retrieval_decision_head(
 
     with torch.no_grad():
 
-        torch.nn.init.kaiming_uniform_(
-            weight,
-            a=5 ** 0.5,
-        )
+        for layer in linear_layers:
 
-        fan_in, _ = (
-            torch.nn.init._calculate_fan_in_and_fan_out(
-                weight
+            torch.nn.init.kaiming_uniform_(
+                layer.weight,
+                a=5 ** 0.5,
             )
-        )
 
-        bound = 1 / (fan_in ** 0.5)
+            if layer.bias is not None:
 
-        torch.nn.init.uniform_(
-            bias,
-            -bound,
-            bound,
-        )
+                fan_in, _ = (
+                    torch.nn.init._calculate_fan_in_and_fan_out(
+                        layer.weight
+                    )
+                )
+
+                bound = 1 / (fan_in ** 0.5)
+
+                torch.nn.init.uniform_(
+                    layer.bias,
+                    -bound,
+                    bound,
+                )
 
     # =========================================================================
     # After initialization
@@ -337,40 +467,50 @@ def initialize_retrieval_decision_head(
     print()
     print("After random initialization:")
 
-    print(
-        f"Weight mean     : "
-        f"{weight.detach().float().mean().item():+.6e}"
-    )
+    for index, layer in enumerate(linear_layers):
 
-    print(
-        f"Weight std      : "
-        f"{weight.detach().float().std().item():.6e}"
-    )
+        print()
+        print(
+            f"Linear layer {index + 1}: "
+            f"{layer.in_features} → {layer.out_features}"
+        )
 
-    print(
-        f"Weight abs mean : "
-        f"{weight.detach().float().abs().mean().item():.6e}"
-    )
+        print(
+            f"  Weight mean     : "
+            f"{layer.weight.detach().float().mean().item():+.6e}"
+        )
 
-    print(
-        f"Weight min      : "
-        f"{weight.detach().float().min().item():+.6e}"
-    )
+        print(
+            f"  Weight std      : "
+            f"{layer.weight.detach().float().std().item():.6e}"
+        )
 
-    print(
-        f"Weight max      : "
-        f"{weight.detach().float().max().item():+.6e}"
-    )
+        print(
+            f"  Weight abs mean : "
+            f"{layer.weight.detach().float().abs().mean().item():.6e}"
+        )
 
-    print(
-        f"Bias            : "
-        f"{bias.detach().float().item():+.6e}"
-    )
+        print(
+            f"  Weight min      : "
+            f"{layer.weight.detach().float().min().item():+.6e}"
+        )
 
-    print(
-        f"Initial zero-hidden score: "
-        f"{torch.sigmoid(bias.detach().float()).item():.8f}"
-    )
+        print(
+            f"  Weight max      : "
+            f"{layer.weight.detach().float().max().item():+.6e}"
+        )
+
+        if layer.bias is not None:
+
+            print(
+                f"  Bias mean       : "
+                f"{layer.bias.detach().float().mean().item():+.6e}"
+            )
+
+            print(
+                f"  Bias std        : "
+                f"{layer.bias.detach().float().std().item():.6e}"
+            )
 
     print()
     print(
@@ -386,7 +526,11 @@ def initialize_retrieval_decision_head(
     )
 
     print(
-        "  score  = sigmoid(weight @ hidden + bias)"
+        "  activations = SiLU"
+    )
+
+    print(
+        "  score  = sigmoid(MLP(hidden_state))"
     )
 
     print("=" * 80)
@@ -400,10 +544,11 @@ def verify_retrieval_decision_head(
     demo,
 ) -> None:
     """
-    Verify that the retrieval decision head is no longer zero initialized.
+    Verify that the complete ART retrieval decision head is randomly
+    initialized and produces valid decision scores.
 
     The verification uses random hidden states because evaluating the head
-    only on a zero hidden state would test the bias and not the weight.
+    only on a zero hidden state would not sufficiently test the weights.
     """
 
     print()
@@ -411,70 +556,144 @@ def verify_retrieval_decision_head(
     print("VERIFYING RANDOM RETRIEVAL DECISION HEAD")
     print("=" * 80)
 
-    projection = (
-        demo.retrieval_decision_head.projection
-    )
+    head = demo.retrieval_decision_head
 
-    weight = projection.weight
-
-    bias = projection.bias
+    network = head.network
 
     hidden_size = demo.config.hidden_size
+
+    # =========================================================================
+    # Find Linear layers
+    # =========================================================================
+
+    linear_layers = [
+        module
+        for module in network.modules()
+        if isinstance(module, torch.nn.Linear)
+    ]
+
+    if not linear_layers:
+
+        raise RuntimeError(
+            "No nn.Linear layers were found inside "
+            "retrieval_decision_head.network."
+        )
+
+    # =========================================================================
+    # Verify architecture
+    # =========================================================================
+
+    expected_dimensions = [
+        (
+            hidden_size,
+            hidden_size // 2,
+        ),
+        (
+            hidden_size // 2,
+            hidden_size // 4,
+        ),
+        (
+            hidden_size // 4,
+            hidden_size // 8,
+        ),
+        (
+            hidden_size // 8,
+            1,
+        ),
+    ]
+
+    actual_dimensions = [
+        (
+            layer.in_features,
+            layer.out_features,
+        )
+        for layer in linear_layers
+    ]
+
+    print()
+    print("Expected Linear architecture:")
+
+    for in_features, out_features in expected_dimensions:
+
+        print(
+            f"  {in_features} → {out_features}"
+        )
+
+    print()
+    print("Actual Linear architecture:")
+
+    for in_features, out_features in actual_dimensions:
+
+        print(
+            f"  {in_features} → {out_features}"
+        )
+
+    if actual_dimensions != expected_dimensions:
+
+        raise RuntimeError(
+            "Retrieval decision head architecture does not match "
+            "the expected structure."
+        )
+
+    print()
+    print(
+        "✓ Retrieval decision head architecture is correct."
+    )
 
     # =========================================================================
     # Weight verification
     # =========================================================================
 
-    weight_abs_mean = (
-        weight.detach()
-        .float()
-        .abs()
-        .mean()
-        .item()
-    )
-
-    weight_std = (
-        weight.detach()
-        .float()
-        .std()
-        .item()
-    )
-
     print()
-    print(
-        f"Weight abs mean : "
-        f"{weight_abs_mean:.6e}"
-    )
+    print("Checking Linear layer weights:")
 
-    print(
-        f"Weight std      : "
-        f"{weight_std:.6e}"
-    )
+    for index, layer in enumerate(linear_layers):
 
-    if weight_abs_mean == 0.0:
-
-        raise RuntimeError(
-            "Retrieval decision head weight is still zero."
+        weight_abs_mean = (
+            layer.weight.detach()
+            .float()
+            .abs()
+            .mean()
+            .item()
         )
 
-    print(
-        "✓ Retrieval decision head weight is non-zero."
-    )
+        weight_std = (
+            layer.weight.detach()
+            .float()
+            .std()
+            .item()
+        )
 
-    # =========================================================================
-    # Bias verification
-    # =========================================================================
+        print()
+        print(
+            f"Linear layer {index + 1}:"
+        )
 
-    bias_value = (
-        bias.detach()
-        .float()
-        .item()
-    )
+        print(
+            f"  Shape           : "
+            f"{tuple(layer.weight.shape)}"
+        )
 
-    print(
-        f"Bias            : "
-        f"{bias_value:+.6e}"
-    )
+        print(
+            f"  Weight abs mean : "
+            f"{weight_abs_mean:.6e}"
+        )
+
+        print(
+            f"  Weight std      : "
+            f"{weight_std:.6e}"
+        )
+
+        if weight_abs_mean == 0.0:
+
+            raise RuntimeError(
+                f"Retrieval decision head Linear layer "
+                f"{index + 1} has zero weights."
+            )
+
+        print(
+            "  ✓ Weight is non-zero."
+        )
 
     # =========================================================================
     # Random hidden states
@@ -484,14 +703,14 @@ def verify_retrieval_decision_head(
         8,
         1,
         hidden_size,
-        device=weight.device,
-        dtype=weight.dtype,
+        device=linear_layers[0].weight.device,
+        dtype=linear_layers[0].weight.dtype,
     )
 
     with torch.no_grad():
 
         decision_scores = (
-            demo.retrieval_decision_head(
+            head(
                 test_hidden
             )
         )
@@ -502,6 +721,54 @@ def verify_retrieval_decision_head(
         .float()
         .cpu()
     )
+
+    # =========================================================================
+    # Verify output shape
+    # =========================================================================
+
+    expected_shape = (
+        test_hidden.shape[0],
+    )
+
+    print()
+    print(
+        f"Decision output shape: "
+        f"{tuple(scores.shape)}"
+    )
+
+    if tuple(scores.shape) != expected_shape:
+
+        raise RuntimeError(
+            f"Unexpected retrieval decision output shape: "
+            f"{tuple(scores.shape)}; "
+            f"expected {expected_shape}."
+        )
+
+    print(
+        "✓ Decision output shape is correct."
+    )
+
+    # =========================================================================
+    # Verify sigmoid range
+    # =========================================================================
+
+    if not torch.all(
+        (scores >= 0.0)
+        & (scores <= 1.0)
+    ):
+
+        raise RuntimeError(
+            "Retrieval decision scores are outside "
+            "the [0, 1] sigmoid range."
+        )
+
+    print(
+        "✓ Decision scores are within [0, 1]."
+    )
+
+    # =========================================================================
+    # Decision score statistics
+    # =========================================================================
 
     print()
     print("Decision scores on random hidden states:")
@@ -545,14 +812,14 @@ def verify_retrieval_decision_head(
         1,
         1,
         hidden_size,
-        device=weight.device,
-        dtype=weight.dtype,
+        device=linear_layers[0].weight.device,
+        dtype=linear_layers[0].weight.dtype,
     )
 
     with torch.no_grad():
 
         zero_decision_score = (
-            demo.retrieval_decision_head(
+            head(
                 zero_hidden
             )
         )
@@ -572,7 +839,8 @@ def verify_retrieval_decision_head(
     )
 
     print(
-        "This value is sigmoid(bias)."
+        "For the MLP head, this is the result of "
+        "propagating zero input through all Linear + SiLU layers."
     )
 
     print()
@@ -664,6 +932,11 @@ def main() -> None:
         f"{demo.model.embed_tokens.weight.dtype}"
     )
 
+    print(
+        f"   Hidden size: "
+        f"{demo.config.hidden_size}"
+    )
+
     # =========================================================================
     # 1.1 Randomly initialize ART retrieval decision head
     # =========================================================================
@@ -729,7 +1002,7 @@ def main() -> None:
     #
     # plus:
     #
-    #     retrieval_decision_head.*
+    #     retrieval_decision_head.network.*
     #
     # Therefore, merge the Qwen state dict into the complete ART state dict.
     #
@@ -882,7 +1155,7 @@ def main() -> None:
             commit_message=(
                 "Initialize ART demo from "
                 "Qwen2.5-3B-Instruct with random "
-                "retrieval decision head"
+                "MLP retrieval decision head"
             ),
         )
 
