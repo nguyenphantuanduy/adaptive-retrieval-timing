@@ -27,10 +27,6 @@ Retrieval decision head architecture:
 
     hidden_size
         ↓
-    hidden_size / 2
-        ↓
-      SiLU
-        ↓
         1
         ↓
      sigmoid
@@ -41,7 +37,7 @@ For Qwen2.5-3B-Instruct:
 
 Therefore:
 
-    2048 → 1024 → 1 → sigmoid
+    2048 → 1 → sigmoid
 """
 
 
@@ -270,30 +266,26 @@ def initialize_retrieval_decision_head(
 
         hidden_size
             ↓
-        hidden_size / 2
-            ↓
-          SiLU
-            ↓
             1
+            ↓
+          sigmoid
 
     For Qwen2.5-3B:
 
-        2048 → 1024 → 1
+        2048 → 1
 
-    Every Linear layer is initialized using the same initialization as
+    The Linear layer is initialized using the same initialization as
     torch.nn.Linear.reset_parameters():
 
         weight -> Kaiming uniform
         bias   -> uniform based on fan-in
 
-    The SiLU layer has no trainable parameters.
-
     The final retrieval decision score is:
 
-        decision_score = sigmoid(final_logit)
+        decision_score = sigmoid(linear(hidden_state))
 
     Therefore, the initial decision score is determined by the randomly
-    initialized MLP and is not forced to 0.5.
+    initialized Linear layer.
     """
 
     print()
@@ -320,19 +312,8 @@ def initialize_retrieval_decision_head(
     )
 
     print(
-        f"  Hidden layer      : "
-        f"{hidden_size} → "
-        f"{hidden_size // 2}"
-    )
-
-    print(
-        "  Activation        : "
-        "SiLU"
-    )
-
-    print(
-        "  Output layer      : "
-        f"{hidden_size // 2} → 1"
+        f"  Output layer      : "
+        f"{hidden_size} → 1"
     )
 
     print(
@@ -359,7 +340,7 @@ def initialize_retrieval_decision_head(
 
     print()
     print(
-        f"Found {len(linear_layers)} Linear layers "
+        f"Found {len(linear_layers)} Linear layer "
         "inside the retrieval decision head."
     )
 
@@ -367,12 +348,12 @@ def initialize_retrieval_decision_head(
     # Verify expected number of Linear layers
     # =========================================================================
 
-    if len(linear_layers) != 2:
+    if len(linear_layers) != 1:
 
         raise RuntimeError(
-            "Expected exactly 2 Linear layers in the retrieval "
+            "Expected exactly 1 Linear layer in the retrieval "
             "decision head for architecture "
-            "hidden_size → hidden_size/2 → 1."
+            "hidden_size → 1."
         )
 
     # =========================================================================
@@ -382,10 +363,6 @@ def initialize_retrieval_decision_head(
     expected_dimensions = [
         (
             hidden_size,
-            hidden_size // 2,
-        ),
-        (
-            hidden_size // 2,
             1,
         ),
     ]
@@ -552,11 +529,7 @@ def initialize_retrieval_decision_head(
     )
 
     print(
-        "  activation = SiLU"
-    )
-
-    print(
-        "  score = sigmoid(MLP(hidden_state))"
+        "  score = sigmoid(Linear(hidden_state))"
     )
 
     print("=" * 80)
@@ -576,10 +549,6 @@ def verify_retrieval_decision_head(
     Architecture:
 
         hidden_size
-            ↓
-        hidden_size / 2
-            ↓
-          SiLU
             ↓
             1
             ↓
@@ -620,10 +589,10 @@ def verify_retrieval_decision_head(
     # Verify number of Linear layers
     # =========================================================================
 
-    if len(linear_layers) != 2:
+    if len(linear_layers) != 1:
 
         raise RuntimeError(
-            "Expected exactly 2 Linear layers in the retrieval "
+            "Expected exactly 1 Linear layer in the retrieval "
             "decision head."
         )
 
@@ -634,10 +603,6 @@ def verify_retrieval_decision_head(
     expected_dimensions = [
         (
             hidden_size,
-            hidden_size // 2,
-        ),
-        (
-            hidden_size // 2,
             1,
         ),
     ]
@@ -880,7 +845,7 @@ def verify_retrieval_decision_head(
 
     print(
         "This is the actual output of the complete "
-        "Linear → SiLU → Linear → sigmoid pipeline "
+        "Linear → sigmoid pipeline "
         "for a zero hidden state."
     )
 
@@ -1196,8 +1161,8 @@ def main() -> None:
             commit_message=(
                 "Initialize ART demo from "
                 "Qwen2.5-3B-Instruct with random "
-                "MLP retrieval decision head "
-                "2048-1024-1"
+                "linear retrieval decision head "
+                "2048-1"
             ),
         )
 

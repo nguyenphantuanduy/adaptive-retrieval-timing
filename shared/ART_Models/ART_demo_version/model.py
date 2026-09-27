@@ -276,10 +276,7 @@ class RetrievalDecisionHead(nn.Module):
         super().__init__()
 
         self.network = nn.Sequential(
-            nn.Linear(hidden_size, hidden_size // 2),  # 2048 → 1024
-            nn.SiLU(),
-
-            nn.Linear(hidden_size // 2, 1),            # 1024 → 1
+            nn.Linear(hidden_size, 1),  # 2048 → 1
         )
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
