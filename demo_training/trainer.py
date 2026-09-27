@@ -10,20 +10,20 @@ class ARTTrainer(Trainer):
     The model is expected to expose:
 
         model.retrieval_count_for_logging: list[int]
-        model.retrieved_segment_indices: list[int]
+        model.retrieve_segment_indices: list[int]
 
     During each training forward:
 
         - retrieval_count_for_logging records the number of
           retrievals for that forward pass.
-        - retrieved_segment_indices records the segment indices
+        - retrieve_segment_indices records the segment indices
           at which retrieval occurred.
 
     At each Trainer logging step:
 
         - Average retrieval count is logged as `retrieval_count`.
         - Retrieved segment indices are logged as
-          `retrieved_segment_indices`.
+          `retrieve_segment_indices`.
         - Both logging lists are reset.
     """
 
@@ -67,10 +67,10 @@ class ARTTrainer(Trainer):
         # RETRIEVED SEGMENT INDICES
         # ============================================================
 
-        if hasattr(model, "retrieved_segment_indices"):
-            retrieved_segment_indices = model.retrieved_segment_indices
+        if hasattr(model, "retrieve_segment_indices"):
+            retrieve_segment_indices = model.retrieve_segment_indices
 
-            if retrieved_segment_indices:
+            if retrieve_segment_indices:
                 # Store the segment indices observed since the
                 # previous logging step.
                 #
@@ -79,12 +79,12 @@ class ARTTrainer(Trainer):
                 #
                 # means retrieval occurred at those segment indices
                 # across the forward passes in this logging interval.
-                logs["retrieved_segment_indices"] = (
-                    list(retrieved_segment_indices)
+                logs["retrieve_segment_indices"] = list(
+                    retrieve_segment_indices
                 )
 
                 # Reset after logging.
-                retrieved_segment_indices.clear()
+                retrieve_segment_indices.clear()
 
         # ============================================================
         # CALL PARENT TRAINER LOG
