@@ -846,7 +846,7 @@ class AttentionMixingProbeForCausalLM(
             ):
                 if self.first_segment_retrieval_decision_score is None:
                     self.first_segment_retrieval_decision_score = new_decision_score.item()
-
+                self.retrieve_segment_indices.append(past_key_values.counter)
                 probability = decrease_probability(probability)
 
                 self._append_trajectory_step(

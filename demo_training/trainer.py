@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from typing import Any
+
 from transformers import Trainer
 
 
@@ -11,30 +13,25 @@ class ARTTrainer(Trainer):
 
         model.retrieval_count_for_logging: list[int]
         model.retrieve_segment_indices: list[int]
-
-    During each training forward:
-
-        - retrieval_count_for_logging records the number of
-          retrievals for that forward pass.
-        - retrieve_segment_indices records the segment indices
-          at which retrieval occurred.
+        model.first_segment_retrieval_decision_score: float | None
 
     At each Trainer logging step:
 
         - Average retrieval count is logged as `retrieval_count`.
         - Retrieved segment indices are logged as
           `retrieve_segment_indices`.
-        - Both logging lists are reset.
+        - First segment retrieval decision score is logged as
+          `first_segment_retrieval_decision_score` if not None.
     """
 
     def log(
         self,
-        logs: dict[str, float],
+        logs: dict[str, Any],
         start_time: float | None = None,
     ) -> None:
         """
         Compute and log ART retrieval statistics since the
-        previous logging step, then reset the logging lists.
+        previous logging step, then reset the logging values.
         """
 
         model = self.model
@@ -51,16 +48,12 @@ class ARTTrainer(Trainer):
             retrieval_counts = model.retrieval_count_for_logging
 
             if retrieval_counts:
-                # Average retrieval count across all forward passes
-                # since the previous logging step.
                 average_retrieval_count = (
                     sum(retrieval_counts) / len(retrieval_counts)
                 )
 
                 logs["retrieval_count"] = average_retrieval_count
 
-                # Reset after logging so the next logging interval
-                # starts with an empty list.
                 retrieval_counts.clear()
 
         # ============================================================
@@ -71,20 +64,27 @@ class ARTTrainer(Trainer):
             retrieve_segment_indices = model.retrieve_segment_indices
 
             if retrieve_segment_indices:
-                # Store the segment indices observed since the
-                # previous logging step.
-                #
-                # Example:
-                # [0, 2, 5, 0, 3]
-                #
-                # means retrieval occurred at those segment indices
-                # across the forward passes in this logging interval.
                 logs["retrieve_segment_indices"] = list(
                     retrieve_segment_indices
                 )
 
-                # Reset after logging.
                 retrieve_segment_indices.clear()
+
+        # ============================================================
+        # FIRST SEGMENT RETRIEVAL DECISION SCORE
+        # ============================================================
+
+        if hasattr(model, "first_segment_retrieval_decision_score"):
+            first_segment_score = (
+                model.first_segment_retrieval_decision_score
+            )
+
+            if first_segment_score is not None:
+                logs["first_segment_retrieval_decision_score"] = (
+                    first_segment_score
+                )
+
+                model.first_segment_retrieval_decision_score = None
 
         # ============================================================
         # CALL PARENT TRAINER LOG
