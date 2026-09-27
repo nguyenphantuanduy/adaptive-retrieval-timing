@@ -31,14 +31,6 @@ Retrieval decision head architecture:
         ↓
       SiLU
         ↓
-    hidden_size / 4
-        ↓
-      SiLU
-        ↓
-    hidden_size / 8
-        ↓
-      SiLU
-        ↓
         1
         ↓
      sigmoid
@@ -49,7 +41,7 @@ For Qwen2.5-3B-Instruct:
 
 Therefore:
 
-    2048 → 1024 → 512 → 256 → 1 → sigmoid
+    2048 → 1024 → 1 → sigmoid
 """
 
 
@@ -282,19 +274,11 @@ def initialize_retrieval_decision_head(
             ↓
           SiLU
             ↓
-        hidden_size / 4
-            ↓
-          SiLU
-            ↓
-        hidden_size / 8
-            ↓
-          SiLU
-            ↓
             1
 
     For Qwen2.5-3B:
 
-        2048 → 1024 → 512 → 256 → 1
+        2048 → 1024 → 1
 
     Every Linear layer is initialized using the same initialization as
     torch.nn.Linear.reset_parameters():
@@ -302,7 +286,7 @@ def initialize_retrieval_decision_head(
         weight -> Kaiming uniform
         bias   -> uniform based on fan-in
 
-    The SiLU layers have no trainable parameters.
+    The SiLU layer has no trainable parameters.
 
     The final retrieval decision score is:
 
@@ -321,6 +305,8 @@ def initialize_retrieval_decision_head(
 
     network = head.network
 
+    hidden_size = demo.config.hidden_size
+
     # =========================================================================
     # Report architecture
     # =========================================================================
@@ -330,38 +316,28 @@ def initialize_retrieval_decision_head(
 
     print(
         f"  Input hidden size : "
-        f"{demo.config.hidden_size}"
+        f"{hidden_size}"
     )
 
     print(
-        f"  Layer 1           : "
-        f"{demo.config.hidden_size} → "
-        f"{demo.config.hidden_size // 2}"
+        f"  Hidden layer      : "
+        f"{hidden_size} → "
+        f"{hidden_size // 2}"
     )
 
     print(
-        f"  Layer 2           : "
-        f"{demo.config.hidden_size // 2} → "
-        f"{demo.config.hidden_size // 4}"
+        "  Activation        : "
+        "SiLU"
     )
 
     print(
-        f"  Layer 3           : "
-        f"{demo.config.hidden_size // 4} → "
-        f"{demo.config.hidden_size // 8}"
+        "  Output layer      : "
+        f"{hidden_size // 2} → 1"
     )
 
     print(
-        f"  Output layer      : "
-        f"{demo.config.hidden_size // 8} → 1"
-    )
-
-    print(
-        "  Activations       : SiLU"
-    )
-
-    print(
-        "  Output activation : sigmoid"
+        "  Output activation : "
+        "sigmoid"
     )
 
     # =========================================================================
@@ -386,6 +362,58 @@ def initialize_retrieval_decision_head(
         f"Found {len(linear_layers)} Linear layers "
         "inside the retrieval decision head."
     )
+
+    # =========================================================================
+    # Verify expected number of Linear layers
+    # =========================================================================
+
+    if len(linear_layers) != 2:
+
+        raise RuntimeError(
+            "Expected exactly 2 Linear layers in the retrieval "
+            "decision head for architecture "
+            "hidden_size → hidden_size/2 → 1."
+        )
+
+    # =========================================================================
+    # Verify expected dimensions
+    # =========================================================================
+
+    expected_dimensions = [
+        (
+            hidden_size,
+            hidden_size // 2,
+        ),
+        (
+            hidden_size // 2,
+            1,
+        ),
+    ]
+
+    actual_dimensions = [
+        (
+            layer.in_features,
+            layer.out_features,
+        )
+        for layer in linear_layers
+    ]
+
+    if actual_dimensions != expected_dimensions:
+
+        raise RuntimeError(
+            "Retrieval decision head architecture mismatch.\n"
+            f"Expected: {expected_dimensions}\n"
+            f"Actual:   {actual_dimensions}"
+        )
+
+    print()
+    print("Linear architecture verified:")
+
+    for in_features, out_features in actual_dimensions:
+
+        print(
+            f"  {in_features} → {out_features}"
+        )
 
     # =========================================================================
     # Before initialization
@@ -513,9 +541,7 @@ def initialize_retrieval_decision_head(
             )
 
     print()
-    print(
-        "Initialization method:"
-    )
+    print("Initialization method:")
 
     print(
         "  weight = Kaiming uniform"
@@ -526,11 +552,11 @@ def initialize_retrieval_decision_head(
     )
 
     print(
-        "  activations = SiLU"
+        "  activation = SiLU"
     )
 
     print(
-        "  score  = sigmoid(MLP(hidden_state))"
+        "  score = sigmoid(MLP(hidden_state))"
     )
 
     print("=" * 80)
@@ -547,8 +573,19 @@ def verify_retrieval_decision_head(
     Verify that the complete ART retrieval decision head is randomly
     initialized and produces valid decision scores.
 
-    The verification uses random hidden states because evaluating the head
-    only on a zero hidden state would not sufficiently test the weights.
+    Architecture:
+
+        hidden_size
+            ↓
+        hidden_size / 2
+            ↓
+          SiLU
+            ↓
+            1
+            ↓
+         sigmoid
+
+    Random hidden states are used to verify the actual forward pass.
     """
 
     print()
@@ -580,6 +617,17 @@ def verify_retrieval_decision_head(
         )
 
     # =========================================================================
+    # Verify number of Linear layers
+    # =========================================================================
+
+    if len(linear_layers) != 2:
+
+        raise RuntimeError(
+            "Expected exactly 2 Linear layers in the retrieval "
+            "decision head."
+        )
+
+    # =========================================================================
     # Verify architecture
     # =========================================================================
 
@@ -590,14 +638,6 @@ def verify_retrieval_decision_head(
         ),
         (
             hidden_size // 2,
-            hidden_size // 4,
-        ),
-        (
-            hidden_size // 4,
-            hidden_size // 8,
-        ),
-        (
-            hidden_size // 8,
             1,
         ),
     ]
@@ -699,20 +739,22 @@ def verify_retrieval_decision_head(
     # Random hidden states
     # =========================================================================
 
+    device = linear_layers[0].weight.device
+
+    dtype = linear_layers[0].weight.dtype
+
     test_hidden = torch.randn(
         8,
         1,
         hidden_size,
-        device=linear_layers[0].weight.device,
-        dtype=linear_layers[0].weight.dtype,
+        device=device,
+        dtype=dtype,
     )
 
     with torch.no_grad():
 
-        decision_scores = (
-            head(
-                test_hidden
-            )
+        decision_scores = head(
+            test_hidden
         )
 
     scores = (
@@ -812,16 +854,14 @@ def verify_retrieval_decision_head(
         1,
         1,
         hidden_size,
-        device=linear_layers[0].weight.device,
-        dtype=linear_layers[0].weight.dtype,
+        device=device,
+        dtype=dtype,
     )
 
     with torch.no_grad():
 
-        zero_decision_score = (
-            head(
-                zero_hidden
-            )
+        zero_decision_score = head(
+            zero_hidden
         )
 
     zero_score = (
@@ -839,8 +879,9 @@ def verify_retrieval_decision_head(
     )
 
     print(
-        "For the MLP head, this is the result of "
-        "propagating zero input through all Linear + SiLU layers."
+        "This is the actual output of the complete "
+        "Linear → SiLU → Linear → sigmoid pipeline "
+        "for a zero hidden state."
     )
 
     print()
@@ -1155,7 +1196,8 @@ def main() -> None:
             commit_message=(
                 "Initialize ART demo from "
                 "Qwen2.5-3B-Instruct with random "
-                "MLP retrieval decision head"
+                "MLP retrieval decision head "
+                "2048-1024-1"
             ),
         )
 
