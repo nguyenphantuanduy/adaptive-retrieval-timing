@@ -50,6 +50,7 @@ MAX_RETRIEVAL_CONTEXT_TOKENS = 500
 MAX_RETRIEVAL_COUNT = 4
 MAX_EXPLORATION_PROBABILITY = 0.5
 MIN_EXPLORATION_PROBABILITY = 0.1
+INIT_EXPLORATION_PROBABILITY = 0.5
 
 import random
 
@@ -341,6 +342,7 @@ class AttentionMixingProbeForCausalLM(
         self.retrieval_count_for_logging = []
         self.query = []
         self.doc = []
+        self.retrieve_segment_indices = []
 
         # Initialize weights and apply final processing
         self.post_init()
@@ -532,7 +534,8 @@ class AttentionMixingProbeForCausalLM(
         self.retrieval_count = 0
         input_ids_buffer = None
         trajectory = []
-        probability = MIN_EXPLORATION_PROBABILITY
+        probability = INIT_EXPLORATION_PROBABILITY
+        self.retrieve_segment_indices = []
 
         # =====================================================================
         # 2. Initial sequence length
@@ -605,6 +608,7 @@ class AttentionMixingProbeForCausalLM(
             ( question_decision_score.item() >= THRESHOLD or flip_coin(probability) )
             and self.retrieval_count < self.max_retrievals
         ):
+            self.retrieve_segment_indices.append(past_key_values.counter)
             probability = decrease_probability(probability)
             
             self._append_trajectory_step(
@@ -753,6 +757,7 @@ class AttentionMixingProbeForCausalLM(
             # -----------------------------------------------------------------
             # 7.3 A sentence has just been completed
             # -----------------------------------------------------------------
+            past_key_values.counter += 1
 
             sentence_tokens = (
                 torch.stack(sentence_buffer)
@@ -836,6 +841,7 @@ class AttentionMixingProbeForCausalLM(
                 ( new_decision_score.item() >= THRESHOLD or flip_coin(probability) )
                 and self.retrieval_count < self.max_retrievals
             ):
+                self.retrieve_segment_indices.append(past_key_values.counter)
                 probability = decrease_probability(probability)
 
                 self._append_trajectory_step(
@@ -1247,7 +1253,7 @@ class AttentionMixingProbeForCausalLM(
             # -----------------------------------------------------------------
 
             if (
-                ( new_decision_score.item() >= THRESHOLD or past_key_values.counter == 1)
+                ( new_decision_score.item() >= THRESHOLD )
                 and self.retrieval_count < self.max_retrievals
             ):
 

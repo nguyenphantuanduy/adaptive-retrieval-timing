@@ -17,7 +17,7 @@ TOKENIZER_PATH = "Qwen/Qwen2.5-3B-Instruct"
 DTYPE = torch.bfloat16
 
 QUESTION = (
-    "How many times did plague occur in the place where the creator of The Worship of Venus died?"
+    "What watercourse is the river on which the Lostock Dam is located the mouth of?"
 )
 
 SYSTEM_PROMPT = """You are a helpful assistant that can solve the given question step by step.
