@@ -5,16 +5,26 @@ from transformers import Trainer
 
 class ARTTrainer(Trainer):
     """
-    Hugging Face Trainer with automatic logging of
-    the average ART retrieval count.
+    Hugging Face Trainer with automatic logging of ART retrieval statistics.
 
     The model is expected to expose:
 
         model.retrieval_count_for_logging: list[int]
+        model.retrieved_segment_indices: list[int]
 
-    Each training forward appends its retrieval count to this list.
-    At each Trainer logging step, the average is computed and the
-    list is reset.
+    During each training forward:
+
+        - retrieval_count_for_logging records the number of
+          retrievals for that forward pass.
+        - retrieved_segment_indices records the segment indices
+          at which retrieval occurred.
+
+    At each Trainer logging step:
+
+        - Average retrieval count is logged as `retrieval_count`.
+        - Retrieved segment indices are logged as
+          `retrieved_segment_indices`.
+        - Both logging lists are reset.
     """
 
     def log(
@@ -23,8 +33,8 @@ class ARTTrainer(Trainer):
         start_time: float | None = None,
     ) -> None:
         """
-        Compute and log the average retrieval count since the
-        previous logging step, then reset the logging list.
+        Compute and log ART retrieval statistics since the
+        previous logging step, then reset the logging lists.
         """
 
         model = self.model
@@ -32,6 +42,10 @@ class ARTTrainer(Trainer):
         # Unwrap if needed (Accelerate / DDP / DeepSpeed / FSDP ...)
         if hasattr(model, "module"):
             model = model.module
+
+        # ============================================================
+        # RETRIEVAL COUNT
+        # ============================================================
 
         if hasattr(model, "retrieval_count_for_logging"):
             retrieval_counts = model.retrieval_count_for_logging
@@ -45,9 +59,36 @@ class ARTTrainer(Trainer):
 
                 logs["retrieval_count"] = average_retrieval_count
 
-                # Reset after logging so the next log interval
+                # Reset after logging so the next logging interval
                 # starts with an empty list.
-                model.retrieval_count_for_logging.clear()
+                retrieval_counts.clear()
+
+        # ============================================================
+        # RETRIEVED SEGMENT INDICES
+        # ============================================================
+
+        if hasattr(model, "retrieved_segment_indices"):
+            retrieved_segment_indices = model.retrieved_segment_indices
+
+            if retrieved_segment_indices:
+                # Store the segment indices observed since the
+                # previous logging step.
+                #
+                # Example:
+                # [0, 2, 5, 0, 3]
+                #
+                # means retrieval occurred at those segment indices
+                # across the forward passes in this logging interval.
+                logs["retrieved_segment_indices"] = (
+                    list(retrieved_segment_indices)
+                )
+
+                # Reset after logging.
+                retrieved_segment_indices.clear()
+
+        # ============================================================
+        # CALL PARENT TRAINER LOG
+        # ============================================================
 
         super().log(
             logs,
