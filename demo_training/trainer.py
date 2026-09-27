@@ -11,6 +11,7 @@ class ARTTrainer(Trainer):
 
         model.retrieval_count_for_logging: list[int]
         model.retrieve_segment_indices: list[int]
+        model.first_segment_retrieval_decision_score: float | None
 
     During each training forward:
 
@@ -18,13 +19,17 @@ class ARTTrainer(Trainer):
           retrievals for that forward pass.
         - retrieve_segment_indices records the segment indices
           at which retrieval occurred.
+        - first_segment_retrieval_decision_score records the
+          retrieval decision score of the first segment.
 
     At each Trainer logging step:
 
         - Average retrieval count is logged as `retrieval_count`.
         - Retrieved segment indices are logged as
           `retrieve_segment_indices`.
-        - Both logging lists are reset.
+        - First segment retrieval decision score is logged as
+          `first_segment_retrieval_decision_score` if it is not None.
+        - Logging values are reset after logging.
     """
 
     def log(
@@ -34,7 +39,7 @@ class ARTTrainer(Trainer):
     ) -> None:
         """
         Compute and log ART retrieval statistics since the
-        previous logging step, then reset the logging lists.
+        previous logging step, then reset the logging values.
         """
 
         model = self.model
@@ -59,7 +64,7 @@ class ARTTrainer(Trainer):
 
                 logs["retrieval_count"] = average_retrieval_count
 
-                # Reset after logging so the next logging interval
+                # Reset after logging so the next log interval
                 # starts with an empty list.
                 retrieval_counts.clear()
 
@@ -85,6 +90,24 @@ class ARTTrainer(Trainer):
 
                 # Reset after logging.
                 retrieve_segment_indices.clear()
+
+        # ============================================================
+        # FIRST SEGMENT RETRIEVAL DECISION SCORE
+        # ============================================================
+
+        if hasattr(model, "first_segment_retrieval_decision_score"):
+            first_segment_score = (
+                model.first_segment_retrieval_decision_score
+            )
+
+            if first_segment_score is not None:
+                logs["first_segment_retrieval_decision_score"] = (
+                    first_segment_score
+                )
+
+                # Reset after logging so the next logging interval
+                # does not reuse the previous value.
+                model.first_segment_retrieval_decision_score = None
 
         # ============================================================
         # CALL PARENT TRAINER LOG
