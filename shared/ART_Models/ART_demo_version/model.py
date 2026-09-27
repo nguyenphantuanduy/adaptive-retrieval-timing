@@ -50,7 +50,7 @@ MAX_RETRIEVAL_CONTEXT_TOKENS = 600
 MAX_RETRIEVAL_COUNT = 4
 MAX_EXPLORATION_PROBABILITY = 0.5
 MIN_EXPLORATION_PROBABILITY = 0.1
-INIT_EXPLORATION_PROBABILITY = 0.5
+INIT_EXPLORATION_PROBABILITY = 0.3
 
 import random
 
@@ -617,7 +617,7 @@ class AttentionMixingProbeForCausalLM(
         # =====================================================================
 
         if (
-            ( question_decision_score.item() >= THRESHOLD or flip_coin(0.1) )
+            ( question_decision_score.item() >= THRESHOLD or flip_coin(MIN_EXPLORATION_PROBABILITY) )
             and self.retrieval_count < self.max_retrievals
         ):
             self.first_segment_retrieval_decision_score = question_decision_score.item()
