@@ -272,9 +272,6 @@ def tokenize_training_sample(
             [-100] * question_length
             +
             answer_input_ids
-
-    The original question is preserved because ART's
-    forward_training() uses it for retrieval.
     """
 
     question = sample["question"]
@@ -552,9 +549,6 @@ def freeze_backbone(model) -> None:
     Therefore layers 21-35 are trainable.
 
     Everything else is frozen.
-
-    Gradient checkpointing is enabled during the
-    gradient-based trajectory replay.
     """
 
     print()
@@ -749,6 +743,117 @@ def print_parameter_summary(model) -> None:
     print(
         f"Trainable percentage : "
         f"{trainable_percentage:.4f}%"
+    )
+
+    print("=" * 80)
+
+
+# ============================================================
+# RETRIEVAL DECISION HEAD HELPERS
+# ============================================================
+
+def get_decision_head_linear_layers(model):
+    """
+    Return all Linear layers inside the ART retrieval decision head.
+    """
+
+    linear_layers = [
+        module
+        for module in model.retrieval_decision_head.modules()
+        if isinstance(module, torch.nn.Linear)
+    ]
+
+    if not linear_layers:
+
+        raise RuntimeError(
+            "No Linear layers found inside "
+            "retrieval_decision_head."
+        )
+
+    return linear_layers
+
+
+def print_decision_head_summary(
+    model,
+    title: str,
+) -> None:
+    """
+    Print architecture and parameter statistics for the complete
+    retrieval decision MLP.
+    """
+
+    linear_layers = get_decision_head_linear_layers(
+        model
+    )
+
+    print()
+    print("=" * 80)
+    print(title)
+    print("=" * 80)
+
+    print(
+        f"Number of Linear layers: "
+        f"{len(linear_layers)}"
+    )
+
+    total_head_parameters = 0
+
+    for index, layer in enumerate(
+        linear_layers
+    ):
+
+        layer_parameters = (
+            layer.weight.numel()
+        )
+
+        if layer.bias is not None:
+            layer_parameters += layer.bias.numel()
+
+        total_head_parameters += layer_parameters
+
+        print()
+        print(
+            f"Linear {index + 1}: "
+            f"{layer.in_features} → "
+            f"{layer.out_features}"
+        )
+
+        print(
+            f"  Weight shape    : "
+            f"{tuple(layer.weight.shape)}"
+        )
+
+        print(
+            f"  Weight abs mean : "
+            f"{layer.weight.detach().float().abs().mean().item():.6e}"
+        )
+
+        print(
+            f"  Weight std      : "
+            f"{layer.weight.detach().float().std().item():.6e}"
+        )
+
+        if layer.bias is not None:
+
+            print(
+                f"  Bias mean       : "
+                f"{layer.bias.detach().float().mean().item():+.6e}"
+            )
+
+            print(
+                f"  Bias std        : "
+                f"{layer.bias.detach().float().std().item():.6e}"
+            )
+
+        print(
+            f"  Parameters      : "
+            f"{layer_parameters:,}"
+        )
+
+    print()
+    print(
+        f"Total decision head parameters: "
+        f"{total_head_parameters:,}"
     )
 
     print("=" * 80)
@@ -1018,6 +1123,11 @@ def main():
         f"{MODEL_REPO}"
     )
 
+    print(
+        f"Model hidden size: "
+        f"{model.config.hidden_size}"
+    )
+
     # ========================================================
     # 8. MOVE MODEL
     # ========================================================
@@ -1036,61 +1146,113 @@ def main():
     # 9. VERIFY LOADED DECISION HEAD
     # ========================================================
 
+    print_decision_head_summary(
+        model=model,
+        title="LOADED RETRIEVAL DECISION HEAD",
+    )
+
+    # ========================================================
+    # 10. VERIFY INITIAL DECISION OUTPUT
+    # ========================================================
+
     print()
     print("=" * 80)
-    print("VERIFYING LOADED RETRIEVAL DECISION HEAD")
+    print("VERIFYING INITIAL RETRIEVAL DECISION HEAD")
     print("=" * 80)
 
-    decision_projection = (
-        model.retrieval_decision_head.projection
+    hidden_size = model.config.hidden_size
+
+    linear_layers = get_decision_head_linear_layers(
+        model
     )
 
-    decision_weight = (
-        decision_projection.weight.detach()
-        .float()
+    first_weight = linear_layers[0].weight
+
+    test_hidden = torch.randn(
+        8,
+        1,
+        hidden_size,
+        device=first_weight.device,
+        dtype=first_weight.dtype,
     )
 
-    decision_bias = (
-        decision_projection.bias.detach()
-        .float()
-    )
+    with torch.no_grad():
 
-    print(
-        f"Weight abs mean : "
-        f"{decision_weight.abs().mean().item():.6e}"
-    )
-
-    print(
-        f"Weight std      : "
-        f"{decision_weight.std().item():.6e}"
-    )
-
-    print(
-        f"Bias            : "
-        f"{decision_bias.item():+.6e}"
-    )
-
-    initial_decision_score = (
-        torch.sigmoid(
-            decision_bias
+        initial_scores = (
+            model.retrieval_decision_head(
+                test_hidden
+            )
         )
+
+    initial_scores = (
+        initial_scores
+        .detach()
+        .float()
+        .cpu()
+    )
+
+    print(
+        f"Random hidden decision mean: "
+        f"{initial_scores.mean().item():.8f}"
+    )
+
+    print(
+        f"Random hidden decision std : "
+        f"{initial_scores.std().item():.8f}"
+    )
+
+    print(
+        f"Random hidden decision min : "
+        f"{initial_scores.min().item():.8f}"
+    )
+
+    print(
+        f"Random hidden decision max : "
+        f"{initial_scores.max().item():.8f}"
+    )
+
+    # --------------------------------------------------------
+    # Zero hidden state
+    # --------------------------------------------------------
+
+    zero_hidden = torch.zeros(
+        1,
+        1,
+        hidden_size,
+        device=first_weight.device,
+        dtype=first_weight.dtype,
+    )
+
+    with torch.no_grad():
+
+        zero_score = (
+            model.retrieval_decision_head(
+                zero_hidden
+            )
+        )
+
+    zero_score = (
+        zero_score
+        .detach()
+        .float()
+        .cpu()
         .item()
     )
 
     print(
-        f"Zero-hidden score: "
-        f"{initial_decision_score:.8f}"
+        f"Zero-hidden decision score: "
+        f"{zero_score:.8f}"
     )
 
     print(
-        f"Threshold       : "
+        f"Retrieval threshold: "
         f"{THRESHOLD:.8f}"
     )
 
     print("=" * 80)
 
     # ========================================================
-    # 10. ART TRAINING MODE
+    # 11. ART TRAINING MODE
     # ========================================================
 
     print()
@@ -1104,7 +1266,7 @@ def main():
     )
 
     # ========================================================
-    # 11. ENABLE GRADIENT CHECKPOINTING
+    # 12. ENABLE GRADIENT CHECKPOINTING
     # ========================================================
 
     print()
@@ -1143,23 +1305,6 @@ def main():
             "Gradient checkpointing: DISABLED"
         )
 
-    # --------------------------------------------------------
-    # ART training uses:
-    #
-    #   collect:
-    #       gradient checkpointing OFF
-    #       no_grad()
-    #
-    #   replay:
-    #       gradient checkpointing ON
-    #       use_cache=False
-    #
-    # Therefore use_cache must remain enabled at the
-    # model/config level for ART generation/collection,
-    # while forward_training() explicitly controls the
-    # replay forward with use_cache=False.
-    # --------------------------------------------------------
-
     model.config.use_cache = True
 
     print(
@@ -1170,7 +1315,7 @@ def main():
     print("=" * 80)
 
     # ========================================================
-    # 12. FREEZE / UNFREEZE
+    # 13. FREEZE / UNFREEZE
     # ========================================================
 
     print()
@@ -1181,7 +1326,7 @@ def main():
     print_parameter_summary(model)
 
     # ========================================================
-    # 13. DATA COLLATOR
+    # 14. DATA COLLATOR
     # ========================================================
 
     print()
@@ -1194,7 +1339,7 @@ def main():
     )
 
     # ========================================================
-    # 14. TRAINING ARGUMENTS
+    # 15. TRAINING ARGUMENTS
     # ========================================================
 
     print()
@@ -1361,7 +1506,7 @@ def main():
     )
 
     # ========================================================
-    # 15. TRAINER
+    # 16. TRAINER
     # ========================================================
 
     print()
@@ -1374,12 +1519,6 @@ def main():
         data_collator=data_collator,
     )
 
-    # --------------------------------------------------------
-    # IMPORTANT:
-    #
-    # ART forward() does not use num_items_in_batch.
-    # --------------------------------------------------------
-
     trainer.model_accepts_loss_kwargs = False
 
     print(
@@ -1391,7 +1530,7 @@ def main():
     )
 
     # ========================================================
-    # 16. MEMORY BEFORE TRAINING
+    # 17. MEMORY BEFORE TRAINING
     # ========================================================
 
     if torch.cuda.is_available():
@@ -1403,7 +1542,7 @@ def main():
         )
 
     # ========================================================
-    # 17. TRAIN
+    # 18. TRAIN
     # ========================================================
 
     print()
@@ -1414,7 +1553,7 @@ def main():
     train_result = trainer.train()
 
     # ========================================================
-    # 18. TRAINING RESULT
+    # 19. TRAINING RESULT
     # ========================================================
 
     print()
@@ -1435,7 +1574,7 @@ def main():
     print("=" * 80)
 
     # ========================================================
-    # 19. MEMORY AFTER TRAINING
+    # 20. MEMORY AFTER TRAINING
     # ========================================================
 
     if torch.cuda.is_available():
@@ -1445,80 +1584,112 @@ def main():
         )
 
     # ========================================================
-    # 20. FINAL DECISION HEAD
+    # 21. FINAL DECISION HEAD
+    # ========================================================
+
+    print_decision_head_summary(
+        model=model,
+        title="FINAL RETRIEVAL DECISION HEAD",
+    )
+
+    # ========================================================
+    # 22. FINAL DECISION OUTPUT
     # ========================================================
 
     print()
-    print("14. Checking final decision head...")
+    print("=" * 80)
+    print("FINAL RETRIEVAL DECISION OUTPUT")
+    print("=" * 80)
 
-    weight = (
-        model.retrieval_decision_head
-        .projection
-        .weight
+    hidden_size = model.config.hidden_size
+
+    linear_layers = get_decision_head_linear_layers(
+        model
     )
 
-    bias = (
-        model.retrieval_decision_head
-        .projection
-        .bias
+    first_weight = linear_layers[0].weight
+
+    test_hidden = torch.randn(
+        8,
+        1,
+        hidden_size,
+        device=first_weight.device,
+        dtype=first_weight.dtype,
     )
 
-    final_bias_value = (
-        bias.detach()
+    with torch.no_grad():
+
+        final_scores = (
+            model.retrieval_decision_head(
+                test_hidden
+            )
+        )
+
+    final_scores = (
+        final_scores
+        .detach()
+        .float()
+        .cpu()
+    )
+
+    print(
+        f"Random hidden decision mean: "
+        f"{final_scores.mean().item():.8f}"
+    )
+
+    print(
+        f"Random hidden decision std : "
+        f"{final_scores.std().item():.8f}"
+    )
+
+    print(
+        f"Random hidden decision min : "
+        f"{final_scores.min().item():.8f}"
+    )
+
+    print(
+        f"Random hidden decision max : "
+        f"{final_scores.max().item():.8f}"
+    )
+
+    zero_hidden = torch.zeros(
+        1,
+        1,
+        hidden_size,
+        device=first_weight.device,
+        dtype=first_weight.dtype,
+    )
+
+    with torch.no_grad():
+
+        final_zero_score = (
+            model.retrieval_decision_head(
+                zero_hidden
+            )
+        )
+
+    final_zero_score = (
+        final_zero_score
+        .detach()
         .float()
         .cpu()
         .item()
     )
 
-    final_zero_hidden_score = (
-        torch.sigmoid(
-            torch.tensor(
-                final_bias_value,
-                dtype=torch.float32,
-            )
-        )
-        .item()
-    )
-
-    print()
-    print("=" * 80)
-    print("FINAL RETRIEVAL DECISION HEAD")
-    print("=" * 80)
-
     print(
-        f"Weight mean     : "
-        f"{weight.detach().float().mean().item():+.6e}"
+        f"Zero-hidden decision score: "
+        f"{final_zero_score:.8f}"
     )
 
     print(
-        f"Weight abs mean : "
-        f"{weight.detach().float().abs().mean().item():.6e}"
-    )
-
-    print(
-        f"Weight std      : "
-        f"{weight.detach().float().std().item():.6e}"
-    )
-
-    print(
-        f"Bias            : "
-        f"{final_bias_value:+.6e}"
-    )
-
-    print(
-        f"Zero-hidden score: "
-        f"{final_zero_hidden_score:.8f}"
-    )
-
-    print(
-        f"Threshold       : "
+        f"Threshold: "
         f"{THRESHOLD:.8f}"
     )
 
     print("=" * 80)
 
     # ========================================================
-    # 21. ART STATE
+    # 23. ART STATE
     # ========================================================
 
     print()
@@ -1599,7 +1770,7 @@ def main():
     print("=" * 80)
 
     # ========================================================
-    # 22. SAVE FINAL MODEL
+    # 24. SAVE FINAL MODEL
     # ========================================================
 
     print()
@@ -1623,7 +1794,7 @@ def main():
     print("=" * 80)
 
     # ========================================================
-    # 23. CLEANUP
+    # 25. CLEANUP
     # ========================================================
 
     print()
