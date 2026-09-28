@@ -412,8 +412,90 @@ def main() -> None:
             f"{model.isTraining}"
         )
 
-    print("-" * 80)
+    # =========================================================================
+    # 12.1 Retrieved queries
+    # =========================================================================
 
+    print("\n" + "=" * 80)
+    print("RETRIEVAL QUERIES")
+    print("=" * 80)
+
+    if hasattr(model, "query"):
+
+        if model.query:
+
+            print(
+                f"Total queries: {len(model.query)}"
+            )
+
+            for index, query in enumerate(
+                model.query,
+                start=1,
+            ):
+
+                print(
+                    f"\n[Retrieval {index}]"
+                )
+
+                print("-" * 80)
+
+                print(query)
+
+        else:
+
+            print("(No retrieval queries.)")
+
+    else:
+
+        print(
+            "Model does not have attribute: query"
+        )
+
+    # =========================================================================
+    # 12.2 Retrieved documents
+    # =========================================================================
+
+    print("\n" + "=" * 80)
+    print("RETRIEVED DOCUMENTS")
+    print("=" * 80)
+
+    if hasattr(model, "doc"):
+
+        if model.doc:
+
+            print(
+                f"Total documents: {len(model.doc)}"
+            )
+
+            for index, document in enumerate(
+                model.doc,
+                start=1,
+            ):
+
+                print(
+                    f"\n[Retrieval {index}]"
+                )
+
+                print("-" * 80)
+
+                print(document)
+
+        else:
+
+            print("(No retrieved documents.)")
+
+    else:
+
+        print(
+            "Model does not have attribute: doc"
+        )
+
+    print("\n" + "=" * 80)
+
+
+# =============================================================================
+# Entry point
+# =============================================================================
 
 if __name__ == "__main__":
     main()

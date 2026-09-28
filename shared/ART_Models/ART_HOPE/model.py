@@ -325,7 +325,7 @@ class AttentionMixingProbeModel(AttentionMixingProbePreTrainedModel):
 
         decision_hidden_states = shared_hidden_states
 
-        decision_past_key_values = past_key_values.decision_cache
+        decision_past_key_values = past_key_values.decision_cache if past_key_values is not None else None
 
         for i, decoder_layer in enumerate(self.decision_layers):
             decision_hidden_states = decoder_layer(
