@@ -11,7 +11,7 @@ from huggingface_hub import HfApi
 
 LOCAL_MODEL_DIR = Path("./art-training-output")
 
-HF_REPO_ID = "adaptive-retrieval-timing/ART-Demo-Qwen2.5-3B"
+HF_REPO_ID = "adaptive-retrieval-timing/ART-HOPE"
 
 REPO_TYPE = "model"
 
@@ -134,7 +134,7 @@ def upload_model_to_hf() -> None:
 
     print()
     print(
-        f"Repository:"
+        "Repository:"
     )
 
     print(

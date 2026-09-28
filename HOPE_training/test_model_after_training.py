@@ -9,7 +9,7 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 # =============================================================================
 
 # Model saved after ART training.
-MODEL_PATH = "adaptive-retrieval-timing/ART-Demo-Qwen2.5-3B"
+MODEL_PATH = "adaptive-retrieval-timing/ART-HOPE"
 
 # Tokenizer.
 TOKENIZER_PATH = "Qwen/Qwen2.5-3B-Instruct"
@@ -159,16 +159,16 @@ def main() -> None:
     #
     # Current architecture:
     #
-    #     hidden state
-    #          │
-    #          ▼
+    #     decision hidden state
+    #            │
+    #            ▼
     #     Linear(2048 → 1)
-    #          │
-    #          ▼
-    #        sigmoid
-    #          │
-    #          ▼
-    #       decision
+    #            │
+    #            ▼
+    #          sigmoid
+    #            │
+    #            ▼
+    #         decision
     #
     # The trained decision head is loaded directly from the checkpoint.
     # Nothing is initialized here.
@@ -203,7 +203,8 @@ def main() -> None:
 
     if len(decision_head.network) != 1:
         raise RuntimeError(
-            "Expected exactly one layer in retrieval_decision_head.network, "
+            "Expected exactly one layer in "
+            "retrieval_decision_head.network, "
             f"but found {len(decision_head.network)} layers."
         )
 
@@ -212,7 +213,8 @@ def main() -> None:
     if not isinstance(decision_projection, torch.nn.Linear):
         raise RuntimeError(
             "Expected retrieval_decision_head.network[0] "
-            f"to be nn.Linear, but got {type(decision_projection).__name__}."
+            f"to be nn.Linear, but got "
+            f"{type(decision_projection).__name__}."
         )
 
     if decision_projection.out_features != 1:
@@ -228,7 +230,7 @@ def main() -> None:
     )
 
     print(
-        f"   Trainable parameters: "
+        f"   Parameters: "
         f"{sum(p.numel() for p in decision_head.parameters()):,}"
     )
 
