@@ -25,7 +25,6 @@ class ARTCache(Cache):
         offloading=False,
         offload_only_non_sliding=False,
     ):
-        super().__init__()
 
         # ====================================================
         # WITH DOCUMENT

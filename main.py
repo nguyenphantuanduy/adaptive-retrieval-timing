@@ -8,7 +8,7 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 # Configuration
 # =============================================================================
 
-MODEL_REPO = "adaptive-retrieval-timing/ART-Demo-Qwen2.5-3B"
+MODEL_REPO = "adaptive-retrieval-timing/ART-HOPE"
 TOKENIZER_REPO = "Qwen/Qwen2.5-3B-Instruct"
 
 DTYPE = torch.bfloat16
@@ -31,7 +31,7 @@ When you know the final answer, provide the final answer within <answer> and </a
 def main() -> None:
 
     print("=" * 80)
-    print("ART DEMO GENERATION TEST")
+    print("ART-HOPE GENERATION TEST")
     print("=" * 80)
 
     # =========================================================================
@@ -63,6 +63,11 @@ def main() -> None:
 
     print(f"   Tokenizer: {TOKENIZER_REPO}")
 
+    if tokenizer.eos_token is None:
+        raise ValueError(
+            "Tokenizer does not have an EOS token."
+        )
+
     # =========================================================================
     # 3. Build chat
     # =========================================================================
@@ -78,11 +83,6 @@ def main() -> None:
         },
     ]
 
-    # Use Qwen's official chat template.
-    #
-    # The question appears in the user message.
-    # The same question is passed separately to ART later as
-    # `question=QUESTION` for retrieval.
     inputs = tokenizer.apply_chat_template(
         messages,
         tokenize=True,
@@ -128,10 +128,10 @@ def main() -> None:
     )
 
     # =========================================================================
-    # 5. Load ART model
+    # 5. Load ART-HOPE model
     # =========================================================================
 
-    print("\n3. Loading ART demo model...")
+    print("\n3. Loading ART-HOPE model...")
 
     model = AutoModelForCausalLM.from_pretrained(
         MODEL_REPO,
@@ -157,48 +157,110 @@ def main() -> None:
     )
 
     # =========================================================================
-    # 6. Initialize ART decision head
-    # =========================================================================
-    #
-    # The decision head is newly added to the original Qwen model, so its
-    # parameters are not pretrained.
-    #
-    # For this DEMO ONLY:
-    #
-    #     weight = 0
-    #     bias   = 0
-    #
-    # Therefore:
-    #
-    #     logit    = 0
-    #     sigmoid  = 0.5
-    #
-    # With THRESHOLD = 0.5 and condition score >= threshold,
-    # retrieval will be triggered.
-    #
-    # This is NOT the final ART initialization/training strategy.
-    # It is only used to verify that the retrieval pipeline works.
-    #
+    # 6. Verify ART decision head
     # =========================================================================
 
-    print("\n4. Initializing ART decision head for retrieval test...")
+    print("\n4. Verifying ART decision head...")
 
-    with torch.no_grad():
+    if not hasattr(
+        model,
+        "retrieval_decision_head",
+    ):
+        raise RuntimeError(
+            "Loaded model does not contain "
+            "retrieval_decision_head."
+        )
 
-        model.retrieval_decision_head.projection.weight.zero_()
-        model.retrieval_decision_head.projection.bias.zero_()
+    decision_head = model.retrieval_decision_head
 
     print(
-        "   Decision head weight: ZERO"
+        f"   Decision head: "
+        f"{type(decision_head).__name__}"
+    )
+
+    linear_layers = [
+        module
+        for module in decision_head.modules()
+        if isinstance(module, torch.nn.Linear)
+    ]
+
+    if not linear_layers:
+        raise RuntimeError(
+            "No Linear layer found inside "
+            "retrieval_decision_head."
+        )
+
+    for index, layer in enumerate(linear_layers):
+
+        print(
+            f"   Linear {index + 1}: "
+            f"{layer.in_features} → "
+            f"{layer.out_features}"
+        )
+
+        print(
+            f"      Weight shape: "
+            f"{tuple(layer.weight.shape)}"
+        )
+
+        if layer.bias is not None:
+
+            print(
+                f"      Bias shape: "
+                f"{tuple(layer.bias.shape)}"
+            )
+
+    # =========================================================================
+    # 7. Verify decision branch
+    # =========================================================================
+
+    print("\n5. Verifying ART decision branch...")
+
+    if not hasattr(
+        model.model,
+        "decision_layers",
+    ):
+        raise RuntimeError(
+            "Loaded model does not contain "
+            "model.decision_layers."
+        )
+
+    if not hasattr(
+        model.model,
+        "decision_norm",
+    ):
+        raise RuntimeError(
+            "Loaded model does not contain "
+            "model.decision_norm."
+        )
+
+    print(
+        f"   Decision layers: "
+        f"{len(model.model.decision_layers)}"
     )
 
     print(
-        "   Decision head bias:   ZERO"
+        "   Decision norm: present"
     )
 
-    # Verify the initial decision score.
+    print(
+        "   Decision head: present"
+    )
+
+    # =========================================================================
+    # 8. Check loaded decision head output
+    # =========================================================================
     #
-    # Use a dummy hidden state with the same hidden dimension as Qwen.
+    # IMPORTANT:
+    #
+    # The decision head is loaded directly from ART-HOPE.
+    #
+    # No manual initialization is performed here.
+    #
+    # =========================================================================
+
+    print("\n6. Checking loaded decision head output...")
+
     hidden_size = model.config.hidden_size
 
     dummy_hidden_state = torch.zeros(
@@ -211,22 +273,29 @@ def main() -> None:
 
     with torch.inference_mode():
 
-        initial_decision_score = (
+        decision_score = (
             model.retrieval_decision_head(
                 dummy_hidden_state
             )
         )
 
+    decision_score = (
+        decision_score
+        .detach()
+        .float()
+        .cpu()
+    )
+
     print(
-        f"   Initial decision score: "
-        f"{initial_decision_score.detach().float().cpu().tolist()}"
+        "   Zero-hidden decision score: "
+        f"{decision_score.tolist()}"
     )
 
     # =========================================================================
-    # 7. Generation
+    # 9. Generation
     # =========================================================================
 
-    print("\n5. Generating...")
+    print("\n7. Generating...")
 
     print(
         f"   Question: {QUESTION}"
@@ -251,13 +320,7 @@ def main() -> None:
             # -----------------------------------------------------------------
             # ART-specific input
             # -----------------------------------------------------------------
-            #
-            # The question is already included in the user prompt.
-            #
-            # This separate argument is NOT added to the prompt.
-            # It is passed to ART so the retrieval module knows the
-            # original question.
-            #
+
             question=QUESTION,
 
             # -----------------------------------------------------------------
@@ -275,7 +338,7 @@ def main() -> None:
         )
 
     # =========================================================================
-    # 8. Decode generated answer only
+    # 10. Decode generated answer only
     # =========================================================================
 
     prompt_length = input_ids.shape[1]
@@ -291,7 +354,7 @@ def main() -> None:
     )
 
     # =========================================================================
-    # 9. Print result
+    # 11. Print result
     # =========================================================================
 
     print("=" * 80)
@@ -303,36 +366,50 @@ def main() -> None:
     print("=" * 80)
 
     print(
-        f"Generated tokens: {generated_ids.shape[0]}"
+        f"Generated tokens: "
+        f"{generated_ids.shape[0]}"
     )
 
     print(
-        f"Total tokens: {outputs.shape[1]}"
+        f"Total tokens: "
+        f"{outputs.shape[1]}"
     )
 
     # =========================================================================
-    # 10. ART state
+    # 12. ART state
     # =========================================================================
 
     print("\nART STATE")
     print("-" * 80)
 
-    if hasattr(model, "retrieval_count"):
+    if hasattr(
+        model,
+        "retrieval_count",
+    ):
 
         print(
-            f"Retrieval count: {model.retrieval_count}"
+            f"Retrieval count: "
+            f"{model.retrieval_count}"
         )
 
-    if hasattr(model, "max_retrievals"):
+    if hasattr(
+        model,
+        "max_retrievals",
+    ):
 
         print(
-            f"Max retrievals: {model.max_retrievals}"
+            f"Max retrievals: "
+            f"{model.max_retrievals}"
         )
 
-    if hasattr(model, "isTraining"):
+    if hasattr(
+        model,
+        "isTraining",
+    ):
 
         print(
-            f"isTraining: {model.isTraining}"
+            f"isTraining: "
+            f"{model.isTraining}"
         )
 
     print("-" * 80)

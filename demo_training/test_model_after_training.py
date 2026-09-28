@@ -11,13 +11,13 @@ from transformers import AutoTokenizer, AutoModelForCausalLM
 # Model saved after ART training.
 MODEL_PATH = "adaptive-retrieval-timing/ART-Demo-Qwen2.5-3B"
 
-# Tokenizer was also saved to the same directory after training.
+# Tokenizer.
 TOKENIZER_PATH = "Qwen/Qwen2.5-3B-Instruct"
 
 DTYPE = torch.bfloat16
 
 QUESTION = (
-    "What watercourse is the river on which the Lostock Dam is located the mouth of?"
+    'When was the region that lies to the north of what used to be known as the "Near East" and the location of Operation Earnest Will established?'
 )
 
 SYSTEM_PROMPT = """You are a helpful assistant that can solve the given question step by step.
@@ -66,7 +66,7 @@ def main() -> None:
     print(f"   Tokenizer: {TOKENIZER_PATH}")
 
     # =========================================================================
-    # 3. Build chat
+    # 3. Build chat prompt
     # =========================================================================
 
     messages = [
@@ -157,20 +157,84 @@ def main() -> None:
     # 6. Verify TRAINED ART decision head
     # =========================================================================
     #
-    # IMPORTANT:
+    # Current architecture:
     #
-    # Do NOT initialize the decision head here.
+    #     hidden state
+    #          │
+    #          ▼
+    #     Linear(2048 → 1)
+    #          │
+    #          ▼
+    #        sigmoid
+    #          │
+    #          ▼
+    #       decision
     #
-    # The trained retrieval decision head is already stored inside
-    # ./art-training-output by trainer.save_model().
-    #
+    # The trained decision head is loaded directly from the checkpoint.
+    # Nothing is initialized here.
     # =========================================================================
 
     print("\n4. Verifying TRAINED ART decision head...")
 
-    decision_projection = (
-        model.retrieval_decision_head.projection
+    decision_head = model.retrieval_decision_head
+
+    print(
+        f"   Decision head class: "
+        f"{type(decision_head).__name__}"
     )
+
+    print(
+        f"   Decision head structure:\n"
+        f"{decision_head}"
+    )
+
+    # -------------------------------------------------------------------------
+    # Current head:
+    #
+    # model.retrieval_decision_head.network[0]
+    #
+    # should be nn.Linear(2048, 1)
+    # -------------------------------------------------------------------------
+
+    if not hasattr(decision_head, "network"):
+        raise RuntimeError(
+            "retrieval_decision_head does not have a 'network' attribute."
+        )
+
+    if len(decision_head.network) != 1:
+        raise RuntimeError(
+            "Expected exactly one layer in retrieval_decision_head.network, "
+            f"but found {len(decision_head.network)} layers."
+        )
+
+    decision_projection = decision_head.network[0]
+
+    if not isinstance(decision_projection, torch.nn.Linear):
+        raise RuntimeError(
+            "Expected retrieval_decision_head.network[0] "
+            f"to be nn.Linear, but got {type(decision_projection).__name__}."
+        )
+
+    if decision_projection.out_features != 1:
+        raise RuntimeError(
+            "Expected decision head output dimension = 1, "
+            f"but got {decision_projection.out_features}."
+        )
+
+    print(
+        f"   Linear: "
+        f"{decision_projection.in_features} → "
+        f"{decision_projection.out_features}"
+    )
+
+    print(
+        f"   Trainable parameters: "
+        f"{sum(p.numel() for p in decision_head.parameters()):,}"
+    )
+
+    # -------------------------------------------------------------------------
+    # Weight statistics
+    # -------------------------------------------------------------------------
 
     decision_weight = (
         decision_projection.weight
@@ -184,6 +248,11 @@ def main() -> None:
         .detach()
         .float()
         .cpu()
+    )
+
+    print(
+        f"   Weight shape: "
+        f"{tuple(decision_weight.shape)}"
     )
 
     print(
@@ -207,17 +276,62 @@ def main() -> None:
     )
 
     # =========================================================================
-    # 7. Generation
+    # 7. Test decision head
     # =========================================================================
 
-    print("\n5. Generating...")
+    print("\n5. Testing decision head...")
+
+    with torch.inference_mode():
+
+        test_hidden = torch.randn(
+            1,
+            1,
+            decision_projection.in_features,
+            device=device,
+            dtype=model.model.embed_tokens.weight.dtype,
+        )
+
+        test_decision = decision_head(
+            test_hidden
+        )
+
+    print(
+        f"   Input shape: "
+        f"{tuple(test_hidden.shape)}"
+    )
+
+    print(
+        f"   Output shape: "
+        f"{tuple(test_decision.shape)}"
+    )
+
+    print(
+        f"   Decision value: "
+        f"{test_decision.item():.6f}"
+    )
+
+    if not (
+        0.0 <= test_decision.item() <= 1.0
+    ):
+        raise RuntimeError(
+            "Decision head output is outside [0, 1]. "
+            "Expected sigmoid output."
+        )
+
+    print("   Decision head verification: OK")
+
+    # =========================================================================
+    # 8. Generation
+    # =========================================================================
+
+    print("\n6. Generating...")
 
     print(
         f"   Question: {QUESTION}"
     )
 
     print(
-        "   Max new tokens: 512"
+        "   Max new tokens: 1024"
     )
 
     print(
@@ -253,7 +367,7 @@ def main() -> None:
         )
 
     # =========================================================================
-    # 8. Decode generated answer only
+    # 9. Decode generated answer only
     # =========================================================================
 
     prompt_length = input_ids.shape[1]
@@ -269,7 +383,7 @@ def main() -> None:
     )
 
     # =========================================================================
-    # 9. Print result
+    # 10. Print result
     # =========================================================================
 
     print("=" * 80)
@@ -289,7 +403,7 @@ def main() -> None:
     )
 
     # =========================================================================
-    # 10. ART state
+    # 11. ART state
     # =========================================================================
 
     print("\nART STATE")
@@ -313,16 +427,26 @@ def main() -> None:
             f"isTraining: {model.isTraining}"
         )
 
-    print("QUERY:")
-    for i, q in enumerate(model.query):
-        print(f"[{i}] {q}")
+    if hasattr(model, "query"):
 
-    print("\nDOC:")
-    for i, d in enumerate(model.doc):
-        print(f"[{i}] {d}")
+        print("QUERY:")
+
+        for i, q in enumerate(model.query):
+            print(f"[{i}] {q}")
+
+    if hasattr(model, "doc"):
+
+        print("\nDOC:")
+
+        for i, d in enumerate(model.doc):
+            print(f"[{i}] {d}")
 
     print("-" * 80)
 
+
+# =============================================================================
+# Entry point
+# =============================================================================
 
 if __name__ == "__main__":
     main()
