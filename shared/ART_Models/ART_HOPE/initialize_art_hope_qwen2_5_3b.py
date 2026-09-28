@@ -59,7 +59,7 @@ with the LM normalization layer.
 Run this file from the repository root:
 
     .\\.venv\\Scripts\\python.exe ^
-        shared/ART_Models/ART_HOPE/initialize_art_hop_qwen2_5_3b.py
+        shared/ART_Models/ART_HOPE/initialize_art_hope_qwen2_5_3b.py
 """
 
 from __future__ import annotations

@@ -74,6 +74,8 @@ class ARTModelOutputWithPast(BaseModelOutputWithPast):
     last_decision_hidden_state: torch.FloatTensor | None = None
 
 class AttentionMixingProbePreTrainedModel(Qwen2PreTrainedModel):
+    config_class = ARTConfig
+
     _no_split_modules = [
         "AttentionMixingProbeDecoderLayer",
     ]
