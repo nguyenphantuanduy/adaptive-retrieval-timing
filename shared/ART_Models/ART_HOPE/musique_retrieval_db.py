@@ -304,10 +304,10 @@ class MuSiQueRetrievalDB:
 
             passage_parts.append(
                 f"Title: {doc['title']}\n"
-                f"{doc['document']}\n"
+                f"{doc['content']}"
             )
 
-        passages = "\n".join(passage_parts)
+        passages = "\n\n".join(passage_parts)
 
         # --------------------------------------------------------------
         # Truncate retrieved passages if requested
@@ -323,11 +323,8 @@ class MuSiQueRetrievalDB:
         # Add observation markers AFTER truncation
         # --------------------------------------------------------------
 
-        return (
-            "\n<observation>\n"
-            f"{passages}"
-            "\n</observation>\n"
-        )
+        return append_retrieval_observation(passages)
+        
 
     def search_with_metadata(
         self,
@@ -387,3 +384,37 @@ class MuSiQueRetrievalDB:
 
     def __len__(self):
         return self.index.ntotal
+
+
+def append_retrieval_observation(observation):
+    """
+    Create the text suffix used to inject retrieved evidence
+    into the ongoing generation.
+
+    Input:
+        observation: raw retrieved context
+
+    Output:
+        A text string:
+
+        <|im_end|>
+        <|im_start|>user
+
+        <observation>
+        {observation}
+
+        </observation><|im_end|>
+        <|im_start|>assistant
+    """
+
+    return (
+        "<|im_end|>\n"
+        "<|im_start|>user\n"
+        "\n"
+        "<observation>\n\n"
+        + observation
+        + "\n\n"
+        "</observation>"
+        "<|im_end|>\n"
+        "<|im_start|>assistant\n"
+    )

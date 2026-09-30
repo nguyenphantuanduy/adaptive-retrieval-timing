@@ -462,4 +462,63 @@ def test_create_teacher_prompt():
     )
 
 if __name__ == "__main__":
-    test_create_teacher_prompt()
+    from .load_dataset import load_musique_ans
+
+    dataset = load_musique_ans()
+
+    target_question = (
+        "What watercourse is the river on which the Lostock Dam "
+        "is located the mouth of?"
+    )
+
+    # ========================================================
+    # FIND TARGET SAMPLE
+    # ========================================================
+
+    raw_sample = None
+
+    for split in ["dev", "train", "test"]:
+        for item in dataset[split]:
+            if item["question"] == target_question:
+                raw_sample = item
+                print(f"✓ Found sample in split: {split}")
+                break
+
+        if raw_sample is not None:
+            break
+
+    if raw_sample is None:
+        raise ValueError(
+            f"Could not find question:\n{target_question}"
+        )
+
+    # ========================================================
+    # CONVERT SAMPLE
+    # ========================================================
+
+    sample = MuSiQueSampleConverter.from_musique(
+        raw_sample
+    )
+
+    # ========================================================
+    # CREATE TEACHER PROMPT
+    # ========================================================
+
+    prompt = create_teacher_prompt(
+        sample=sample,
+    )
+
+    # ========================================================
+    # PRINT
+    # ========================================================
+
+    print()
+    print("=" * 80)
+    print("TEACHER PROMPT")
+    print("=" * 80)
+    print()
+
+    print(prompt)
+
+    print()
+    print("=" * 80)

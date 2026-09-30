@@ -452,6 +452,12 @@ class AttentionMixingProbeForCausalLM(
     def disable_training_mode(self):
         self.isTraining = False
 
+    def enable_retrieval(self):
+        self.max_retrievals = MAX_RETRIEVAL_COUNT
+
+    def disable_retrieval(self):
+        self.max_retrievals = 0
+
     def _get_retriever(self):
         if self.retriever is None:
             self.retriever = MuSiQueRetrievalDB(
@@ -1230,7 +1236,7 @@ class AttentionMixingProbeForCausalLM(
         # =====================================================================
 
         question: str | None = None,
-
+        
         **kwargs: Unpack[TransformersKwargs],
     ) -> CausalLMOutputWithPast:
 
@@ -1270,8 +1276,10 @@ class AttentionMixingProbeForCausalLM(
             )
 
             first_token_generation = True
+
             self.query = []
-            self.doc =[]
+            self.doc = []
+
             # Reset retrieval quota for a new generation.
             self.retrieval_count = 0
 
@@ -1283,10 +1291,6 @@ class AttentionMixingProbeForCausalLM(
                 num_tokens=1,
             )
 
-        # =====================================================================
-        # 2. Recover persistent ART retrieval state from cache
-        # =====================================================================
-
         document_attention_mask = (
             past_key_values.document_attention_mask
         )
@@ -1296,7 +1300,7 @@ class AttentionMixingProbeForCausalLM(
         )
 
         # =====================================================================
-        # 3. Current sequence length
+        # 2. Current sequence length
         #
         # attention_mask represents the sequence before adding the current
         # input tokens.
@@ -1307,20 +1311,27 @@ class AttentionMixingProbeForCausalLM(
         current_sequence_length = attention_mask.shape[1]
 
         # =====================================================================
-        # 4. Forward current input
+        # 3. Forward current input
+        #
+        # Attention mixing is currently disabled.
+        #
+        # Therefore:
+        #   document_attention_mask = None
+        #   retrieval_decision = None
+        #
+        # The attention module uses attn_weights_with_doc directly.
         # =====================================================================
+
         kwargs.pop("document_attention_mask", None)
         kwargs.pop("retrieval_decision", None)
 
         outputs: ARTModelOutputWithPast = self.model(
             input_ids=input_ids,
             attention_mask=attention_mask,
-            position_ids=position_ids,
             past_key_values=past_key_values,
-            inputs_embeds=inputs_embeds,
+            document_attention_mask=document_attention_mask,
+            retrieval_decision=retrieval_decision,
             use_cache=True,
-            document_attention_mask=None,
-            retrieval_decision=None,
             **kwargs,
         )
 
@@ -1329,11 +1340,8 @@ class AttentionMixingProbeForCausalLM(
         hidden_states = outputs.last_hidden_state
         decision_hidden_states = outputs.last_decision_hidden_state
 
-        # # Current input is now part of the sequence.
-        # current_sequence_length += input_ids.shape[1]
-
         # =====================================================================
-        # 5. Determine whether to make a retrieval decision
+        # 4. Determine whether to make a retrieval decision
         #
         # First generation token:
         #     always make a decision.
@@ -1353,7 +1361,9 @@ class AttentionMixingProbeForCausalLM(
                 )
 
         if sentence_completed:
-            past_key_values.counter = past_key_values.counter + 1
+            past_key_values.counter = (
+                past_key_values.counter + 1
+            )
 
         should_decide = (
             first_token_generation
@@ -1361,13 +1371,16 @@ class AttentionMixingProbeForCausalLM(
         )
 
         # =====================================================================
-        # 6. Retrieval decision
+        # 5. Retrieval decision
         # =====================================================================
 
         if should_decide:
 
             # -----------------------------------------------------------------
-            # 6.1 Compute decision score
+            # 5.1 Compute decision score
+            #
+            # The score is ONLY used to decide whether to retrieve.
+            # It is NOT passed to the attention module.
             # -----------------------------------------------------------------
 
             new_decision_score = (
@@ -1377,24 +1390,26 @@ class AttentionMixingProbeForCausalLM(
             )
 
             # -----------------------------------------------------------------
-            # 6.2 Check retrieval condition
+            # 5.2 Check retrieval condition
             # -----------------------------------------------------------------
 
             if (
-                ( new_decision_score.item() >= THRESHOLD )
+                new_decision_score.item() >= THRESHOLD
                 and self.retrieval_count < self.max_retrievals
             ):
 
                 # -------------------------------------------------------------
-                # 6.2.1 Build retrieval query
+                # 5.2.1 Build retrieval query
                 # -------------------------------------------------------------
 
                 retrieval_query = (
                     past_key_values.build_retrieval_query()
                 )
+
                 self.query.append(retrieval_query)
+
                 # -------------------------------------------------------------
-                # 6.2.2 Retrieve
+                # 5.2.2 Retrieve
                 # -------------------------------------------------------------
 
                 retrieval_text = self._get_retriever().search(
@@ -1402,16 +1417,18 @@ class AttentionMixingProbeForCausalLM(
                     max_passage_tokens=MAX_RETRIEVAL_CONTEXT_TOKENS,
                     tokenizer=self._get_tokenizer(),
                 )
+
                 self.doc.append(retrieval_text)
 
                 self.retrieval_count += 1
 
                 # -------------------------------------------------------------
-                # 6.2.3 Tokenize retrieved document
+                # 5.2.3 Tokenize retrieved document
                 # -------------------------------------------------------------
 
                 document_inputs = self._get_tokenizer()(
                     retrieval_text,
+                    add_special_tokens=False,
                     return_tensors="pt",
                 )
 
@@ -1424,10 +1441,6 @@ class AttentionMixingProbeForCausalLM(
                     document_input_ids.shape[1]
                 )
 
-                # -------------------------------------------------------------
-                # 6.2.4 Create document attention mask
-                # -------------------------------------------------------------
-
                 new_document_attention_mask = (
                     create_document_attention_mask(
                         current_sequence_len=current_sequence_length,
@@ -1436,7 +1449,9 @@ class AttentionMixingProbeForCausalLM(
                 )
 
                 # -------------------------------------------------------------
-                # 6.2.5 Extend normal attention mask
+                # 5.2.4 Extend normal attention mask
+                #
+                # No document_attention_mask is created here.
                 # -------------------------------------------------------------
 
                 attention_mask = update_attention_mask(
@@ -1445,11 +1460,15 @@ class AttentionMixingProbeForCausalLM(
                 )
 
                 # -------------------------------------------------------------
-                # 6.2.6 Forward retrieved document
+                # 5.2.5 Forward retrieved document
                 #
-                # The newly retrieved document becomes available to
-                # subsequent generated tokens.
+                # The document is simply appended to the sequence.
+                #
+                # Attention mixing remains disabled:
+                #   document_attention_mask = None
+                #   retrieval_decision = None
                 # -------------------------------------------------------------
+
                 kwargs.pop("document_attention_mask", None)
                 kwargs.pop("retrieval_decision", None)
 
@@ -1458,9 +1477,11 @@ class AttentionMixingProbeForCausalLM(
                         input_ids=document_input_ids,
                         attention_mask=attention_mask,
                         past_key_values=past_key_values,
+                        document_attention_mask=(
+                            document_attention_mask
+                        ),
+                        retrieval_decision=retrieval_decision,
                         use_cache=True,
-                        document_attention_mask=None,
-                        retrieval_decision=None,
                         **kwargs,
                     )
                 )
@@ -1482,31 +1503,18 @@ class AttentionMixingProbeForCausalLM(
                 )
 
                 # -------------------------------------------------------------
-                # 6.2.7 Update sequence length
+                # 5.2.6 Update sequence length
                 # -------------------------------------------------------------
 
                 current_sequence_length += document_length
-
-                # -------------------------------------------------------------
-                # 6.2.8 Store new document context in ART cache
-                # -------------------------------------------------------------
 
                 past_key_values.update_retrieval_state(
                     document_attention_mask=new_document_attention_mask,
                     retrieval_decision=new_decision_score,
                 )
 
-                # # Update local references as well.
-                # document_attention_mask = (
-                #     new_document_attention_mask
-                # )
-
-                # retrieval_decision = (
-                #     new_decision_score
-                # )
-
         # =====================================================================
-        # 7. Logits
+        # 6. Logits
         # =====================================================================
 
         slice_indices = (
@@ -1520,7 +1528,7 @@ class AttentionMixingProbeForCausalLM(
         )
 
         # =====================================================================
-        # 8. Return
+        # 7. Return
         # =====================================================================
 
         past_key_values.attention_mask = attention_mask

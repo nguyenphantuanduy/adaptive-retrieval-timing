@@ -56,7 +56,39 @@ class SampleObjectForLMLoss(SampleObject):
 # ============================================================
 # INPUT BUILDER
 # ============================================================
+def append_retrieval_observation(observation):
+    """
+    Create the text suffix used to inject retrieved evidence
+    into the ongoing generation.
 
+    Input:
+        observation: raw retrieved context
+
+    Output:
+        A text string:
+
+        <|im_end|>
+        <|im_start|>user
+
+        <observation>
+        {observation}
+
+        </observation><|im_end|>
+        <|im_start|>assistant
+    """
+
+    return (
+        "<|im_end|>\n"
+        "<|im_start|>user\n"
+        "\n"
+        "<observation>\n\n"
+        + observation
+        + "\n\n"
+        "</observation>"
+        "<|im_end|>\n"
+        "<|im_start|>assistant\n"
+    )
+    
 def create_model_input(
     sample: SampleObject,
     tokenizer,
@@ -146,22 +178,20 @@ def create_model_input(
     # Same document ordering as sample.documents.
     # ========================================================
 
-    document_parts = [
-        "<observation>\n"
-    ]
+    document_parts = []
 
     for document in sample.documents:
         document_parts.append(
             f"Title: {document.title}\n"
-            f"{document.content}\n"
+            f"{document.content}"
         )
 
-    document_parts.append(
-        "</observation>\n"
+    observation = "\n\n".join(
+        document_parts
     )
 
-    document_text = "\n".join(
-        document_parts
+    document_text = append_retrieval_observation(
+        observation
     )
 
     # System + user chat + documents.
@@ -174,9 +204,7 @@ def create_model_input(
     # 3. DOCUMENT CHARACTER SPAN
     # ========================================================
 
-    document_start = full_text.find(
-        document_text
-    )
+    document_start = len(base_text)
 
     if document_start == -1:
         raise RuntimeError(
@@ -1618,6 +1646,81 @@ def test_create_model_input_for_lm_loss():
         "  ID   = supervised token"
     )
 
+# if __name__ == "__main__":
+#     # test_create_model_input()
+#     test_create_model_input_for_lm_loss()
+
 if __name__ == "__main__":
-    # test_create_model_input()
-    test_create_model_input_for_lm_loss()
+    tokenizer = AutoTokenizer.from_pretrained(
+        QWEN_REPO
+    )
+
+    sample = SampleObjectForLMLoss(
+        question=(
+            "Who wrote Common Sense and why was it important?"
+        ),
+        documents=[
+            Document(
+                title="Common Sense",
+                content=(
+                    "Common Sense was a pamphlet written "
+                    "by Thomas Paine."
+                ),
+            ),
+            Document(
+                title="Thomas Paine",
+                content=(
+                    "Thomas Paine was an author and key figure "
+                    "in the American Revolution. His work "
+                    "Common Sense crystallized the rebellious "
+                    "demand for independence from Great Britain."
+                ),
+            ),
+        ],
+        answer=(
+            "Thomas Paine wrote Common Sense, and it "
+            "helped build support for American independence."
+        ),
+    )
+
+    result = create_model_input_for_lm_loss(
+        sample=sample,
+        tokenizer=tokenizer,
+    )
+
+    print("=" * 80)
+    print("FULL TEXT")
+    print("=" * 80)
+    print()
+
+    print(result["full_text"])
+
+    print()
+    print("=" * 80)
+    print("TENSOR SHAPES")
+    print("=" * 80)
+
+    print(
+        f"input_ids               : "
+        f"{tuple(result['input_ids'].shape)}"
+    )
+
+    print(
+        f"attention_mask          : "
+        f"{tuple(result['attention_mask'].shape)}"
+    )
+
+    print(
+        f"document_attention_mask : "
+        f"{tuple(result['document_attention_mask'].shape)}"
+    )
+
+    print(
+        f"retrieval_decision      : "
+        f"{tuple(result['retrieval_decision'].shape)}"
+    )
+
+    print(
+        f"labels                  : "
+        f"{tuple(result['labels'].shape)}"
+    )
