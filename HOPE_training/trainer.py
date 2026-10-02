@@ -155,7 +155,7 @@ class ARTTrainer(Trainer):
         # ============================================================
         # 1. Collect trajectory
         # ============================================================
-        
+        print("🔥 ARTTrainer.training_step CALLED")
         model.gradient_checkpointing_disable()
         
         with torch.no_grad():
