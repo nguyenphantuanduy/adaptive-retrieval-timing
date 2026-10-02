@@ -53,7 +53,7 @@ WEIGHT_FILE = "model.safetensors"
 # Training epochs
 # ------------------------------------------------------------
 
-NUM_TRAIN_EPOCHS = 0.75
+NUM_TRAIN_EPOCHS = 0.6
 
 
 # ------------------------------------------------------------
