@@ -163,6 +163,8 @@ class ARTTrainer(Trainer):
                 **inputs,
             )
 
+        print(collect_outputs)
+
         model.gradient_checkpointing_enable()
 
         training_inputs = {
