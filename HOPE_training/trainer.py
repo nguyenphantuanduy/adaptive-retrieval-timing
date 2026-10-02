@@ -1,7 +1,8 @@
 from __future__ import annotations
+from typing import Any, Optional, Union
 
-from typing import Any
-
+import torch
+from torch import nn
 from transformers import Trainer
 
 
@@ -129,7 +130,7 @@ class ARTTrainer(Trainer):
                 model.first_segment_retrieval_decision_score
             )
 
-            if first_segment_score is not None:
+            if first_segment_score:
                 logs["first_segment_retrieval_decision_score"] = (
                     first_segment_score
                 )
@@ -143,4 +144,33 @@ class ARTTrainer(Trainer):
         super().log(
             logs,
             start_time=start_time,
+        )
+
+    def training_step(
+        self,
+        model: nn.Module,
+        inputs: dict[str, Union[torch.Tensor, Any]],
+        num_items_in_batch: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+        # ============================================================
+        # 1. Collect trajectory
+        # ============================================================
+        
+        model.gradient_checkpointing_disable()
+        
+        with torch.no_grad():
+            collect_outputs = model.forward_collect(
+                **inputs,
+            )
+
+        model.gradient_checkpointing_enable()
+
+        training_inputs = {
+            "collect_outputs": collect_outputs,
+        }
+
+        return super().training_step(
+            model,
+            training_inputs,
+            num_items_in_batch,
         )

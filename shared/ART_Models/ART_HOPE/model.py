@@ -29,6 +29,7 @@ from transformers.models.qwen2.modeling_qwen2 import (
     Qwen2RMSNorm,
     Qwen2RotaryEmbedding,
 )
+from typing import Any
 from transformers.masking_utils import (
     create_causal_mask,
     create_sliding_window_causal_mask,
@@ -45,12 +46,14 @@ from .utils import (
 )
 
 THRESHOLD = 0.4297
-RETRIEVAL_COST = 0.095349
 MAX_RETRIEVAL_CONTEXT_TOKENS = 600
 MAX_RETRIEVAL_COUNT = 4
 MAX_EXPLORATION_PROBABILITY = 0.5
 MIN_EXPLORATION_PROBABILITY = 0.1
 INIT_EXPLORATION_PROBABILITY = 0.3
+RETRIEVAL_COST_L = -3.697402
+RETRIEVAL_COST_U = 0.278405
+RETRIEVAL_COST_K = 4.572680
 
 import random
 
@@ -437,11 +440,9 @@ class AttentionMixingProbeForCausalLM(
         self.retrieval_count_for_logging = []
         self.model_retrieval_count_for_logging = []
         self.exploration_retrieval_count_for_logging = []
-
-        self.query = []
-        self.doc = []
+        self.retrieval_records = []
         self.retrieve_segment_indices = []
-        self.first_segment_retrieval_decision_score = None
+        self.first_segment_retrieval_decision_score = {}
 
         # Initialize weights and apply final processing
         self.post_init()
@@ -506,6 +507,24 @@ class AttentionMixingProbeForCausalLM(
             }
         )
 
+    def compute_retrieval_cost(
+        self,
+        total_decision_score: torch.Tensor,
+    ) -> torch.Tensor:
+
+        F_d = (
+            RETRIEVAL_COST_U * total_decision_score
+            + (
+                (RETRIEVAL_COST_U - RETRIEVAL_COST_L)
+                / RETRIEVAL_COST_K
+            )
+            * torch.exp(
+                -RETRIEVAL_COST_K * total_decision_score
+            )
+        )
+
+        return -F_d.sum()
+
     # =========================================================================
     # Forward dispatcher
     # =========================================================================
@@ -535,8 +554,9 @@ class AttentionMixingProbeForCausalLM(
         # =====================================================================
 
         question: str | None = None,
-        question_input_ids: torch.LongTensor | None = None,
-        answer_input_ids: torch.LongTensor | None = None,
+        # question_input_ids: torch.LongTensor | None = None,
+        # answer_input_ids: torch.LongTensor | None = None,
+        collect_outputs: dict[str, Any] | None = None,
 
         document_attention_mask: torch.Tensor | None = None,
         retrieval_decision: torch.Tensor | None = None,
@@ -550,17 +570,20 @@ class AttentionMixingProbeForCausalLM(
 
         if self.isTraining:
 
+            # return self.forward_training(
+            #     question=question,
+            #     question_input_ids=question_input_ids,
+            #     answer_input_ids=answer_input_ids,
+            #     attention_mask=attention_mask,
+            #     position_ids=position_ids,
+            #     past_key_values=past_key_values,
+            #     inputs_embeds=inputs_embeds,
+            #     labels=labels,
+            #     logits_to_keep=logits_to_keep,
+            #     **kwargs,
+            # )
             return self.forward_training(
-                question=question,
-                question_input_ids=question_input_ids,
-                answer_input_ids=answer_input_ids,
-                attention_mask=attention_mask,
-                position_ids=position_ids,
-                past_key_values=past_key_values,
-                inputs_embeds=inputs_embeds,
-                labels=labels,
-                logits_to_keep=logits_to_keep,
-                **kwargs,
+                collect_outputs=collect_outputs,
             )
 
         # =====================================================================
@@ -640,7 +663,7 @@ class AttentionMixingProbeForCausalLM(
         trajectory = []
         probability = INIT_EXPLORATION_PROBABILITY
         self.retrieve_segment_indices = []
-        self.first_segment_retrieval_decision_score = None
+        self.first_segment_retrieval_decision_score = {}
         model_retrieval_count = 0
         exploration_retrieval_count = 0
 
@@ -673,13 +696,10 @@ class AttentionMixingProbeForCausalLM(
         question_outputs: ARTModelOutputWithPast = self.model(
             input_ids=question_input_ids,
             attention_mask=attention_mask,
-            position_ids=position_ids,
             past_key_values=past_key_values,
-            inputs_embeds=inputs_embeds,
             use_cache=True,
             document_attention_mask=None,
             retrieval_decision=None,
-            **kwargs,
         )
 
         question_hidden_states = (
@@ -714,15 +734,16 @@ class AttentionMixingProbeForCausalLM(
         # =====================================================================
 
         if (
-            ( question_decision_score.item() >= THRESHOLD or flip_coin(probability) )
+            ( question_decision_score.item() >= THRESHOLD ) # or flip_coin(probability) )
             and self.retrieval_count < self.max_retrievals
         ):
-            if question_decision_score.item() >= THRESHOLD:
-                model_retrieval_count += 1
-            else:
-                exploration_retrieval_count += 1
+            # if question_decision_score.item() >= THRESHOLD:
+            #     model_retrieval_count += 1
+            # else:
+            #     exploration_retrieval_count += 1
 
-            self.first_segment_retrieval_decision_score = question_decision_score.item()
+            model_retrieval_count += 1
+            self.first_segment_retrieval_decision_score["rollout"] = question_decision_score.item()
             self.retrieve_segment_indices.append(past_key_values.counter)
             probability = decrease_probability(probability)
             
@@ -828,7 +849,6 @@ class AttentionMixingProbeForCausalLM(
                 use_cache=True,
                 document_attention_mask=document_attention_mask,
                 retrieval_decision=decision_score,
-                **kwargs,
             )
 
             past_key_values = (
@@ -916,7 +936,6 @@ class AttentionMixingProbeForCausalLM(
                     use_cache=True,
                     document_attention_mask=document_attention_mask,
                     retrieval_decision=decision_score,
-                    **kwargs,
                 )
             )
 
@@ -963,8 +982,8 @@ class AttentionMixingProbeForCausalLM(
                 else:
                     exploration_retrieval_count += 1
 
-                if self.first_segment_retrieval_decision_score is None:
-                    self.first_segment_retrieval_decision_score = new_decision_score.item()
+                if self.first_segment_retrieval_decision_score.get("rollout") is None:
+                    self.first_segment_retrieval_decision_score["rollout"] = new_decision_score.item()
                 self.retrieve_segment_indices.append(past_key_values.counter)
                 probability = decrease_probability(probability)
 
@@ -1080,7 +1099,6 @@ class AttentionMixingProbeForCausalLM(
                         use_cache=True,
                         document_attention_mask=document_attention_mask,
                         retrieval_decision=decision_score,
-                        **kwargs,
                     )
                 )
 
@@ -1162,7 +1180,6 @@ class AttentionMixingProbeForCausalLM(
                     use_cache=True,
                     document_attention_mask=document_attention_mask,
                     retrieval_decision=decision_score,
-                    **kwargs,
                 )
             )
 
@@ -1199,7 +1216,6 @@ class AttentionMixingProbeForCausalLM(
 
             if (
                 ( new_decision_score.item() >= THRESHOLD )
-                and self.retrieval_count < self.max_retrievals
             ):
                 model_retrieval_count += 1
                 self._append_trajectory_step(
@@ -1209,7 +1225,7 @@ class AttentionMixingProbeForCausalLM(
 
         self.model_retrieval_count_for_logging.append(model_retrieval_count)
         self.exploration_retrieval_count_for_logging.append(exploration_retrieval_count)
-
+        self.retrieval_count_for_logging.append(self.retrieval_count)
 
         return {
             "labels": labels,
@@ -1277,8 +1293,7 @@ class AttentionMixingProbeForCausalLM(
 
             first_token_generation = True
 
-            self.query = []
-            self.doc = []
+            self.retrieval_records = []
 
             # Reset retrieval quota for a new generation.
             self.retrieval_count = 0
@@ -1321,10 +1336,6 @@ class AttentionMixingProbeForCausalLM(
         #
         # The attention module uses attn_weights_with_doc directly.
         # =====================================================================
-
-        kwargs.pop("document_attention_mask", None)
-        kwargs.pop("retrieval_decision", None)
-
         outputs: ARTModelOutputWithPast = self.model(
             input_ids=input_ids,
             attention_mask=attention_mask,
@@ -1332,7 +1343,6 @@ class AttentionMixingProbeForCausalLM(
             document_attention_mask=document_attention_mask,
             retrieval_decision=retrieval_decision,
             use_cache=True,
-            **kwargs,
         )
 
         past_key_values = outputs.past_key_values
@@ -1406,8 +1416,6 @@ class AttentionMixingProbeForCausalLM(
                     past_key_values.build_retrieval_query()
                 )
 
-                self.query.append(retrieval_query)
-
                 # -------------------------------------------------------------
                 # 5.2.2 Retrieve
                 # -------------------------------------------------------------
@@ -1418,7 +1426,13 @@ class AttentionMixingProbeForCausalLM(
                     tokenizer=self._get_tokenizer(),
                 )
 
-                self.doc.append(retrieval_text)
+                self.retrieval_records.append(
+                    {
+                        "query": retrieval_query,
+                        "document": retrieval_text,
+                        "decision_score": new_decision_score,
+                    }
+                )
 
                 self.retrieval_count += 1
 
@@ -1469,9 +1483,6 @@ class AttentionMixingProbeForCausalLM(
                 #   retrieval_decision = None
                 # -------------------------------------------------------------
 
-                kwargs.pop("document_attention_mask", None)
-                kwargs.pop("retrieval_decision", None)
-
                 document_outputs: ARTModelOutputWithPast = (
                     self.model(
                         input_ids=document_input_ids,
@@ -1482,7 +1493,6 @@ class AttentionMixingProbeForCausalLM(
                         ),
                         retrieval_decision=retrieval_decision,
                         use_cache=True,
-                        **kwargs,
                     )
                 )
 
@@ -1541,60 +1551,272 @@ class AttentionMixingProbeForCausalLM(
             attentions=outputs.attentions,
         )
 
+    # def forward_training(
+    #     self,
+    #     question: str | None = None,
+    #     question_input_ids: torch.LongTensor | None = None,
+    #     answer_input_ids: torch.LongTensor | None = None,
+    #     attention_mask: torch.Tensor | None = None,
+    #     position_ids: torch.LongTensor | None = None,
+    #     past_key_values: Cache | None = None,
+    #     inputs_embeds: torch.FloatTensor | None = None,
+    #     labels: torch.LongTensor | None = None,
+    #     logits_to_keep: int | torch.Tensor = 0,
+    #     **kwargs: Unpack[TransformersKwargs],
+    # ) -> CausalLMOutputWithPast:
+
+    #     # ============================================================
+    #     # 1. Collect trajectory
+    #     # ============================================================
+
+    #     self.gradient_checkpointing_disable()
+
+    #     with torch.no_grad():
+
+    #         collect_outputs = self.forward_collect(
+    #             question=question,
+    #             question_input_ids=question_input_ids,
+    #             answer_input_ids=answer_input_ids,
+    #             attention_mask=attention_mask,
+    #             position_ids=position_ids,
+    #             past_key_values=past_key_values,
+    #             inputs_embeds=inputs_embeds,
+    #             labels=labels,
+    #             logits_to_keep=logits_to_keep,
+    #             **kwargs,
+    #         )
+
+    #     trajectory = collect_outputs["trajectory"]
+    #     labels = collect_outputs["labels"]
+    #     self.retrieval_count_for_logging.append(
+    #         self.retrieval_count
+    #     )
+
+    #     # ============================================================
+    #     # 2. Enable gradient checkpointing
+    #     # ============================================================
+
+    #     self.gradient_checkpointing_enable()
+
+    #     # ============================================================
+    #     # 3. Replay trajectory with gradient
+    #     # ============================================================
+
+    #     logits_buffer = []
+
+    #         # Number of tokens for which logits have already been collected.
+    #     computed_logits_length = 0
+
+    #     # Retrieval decision from the previous trajectory step.
+    #     decision_score = None
+
+    #     # Sum of all retrieval decision scores.
+    #     total_decision_score = None
+
+    #     for item in trajectory:
+
+    #         # --------------------------------------------------------
+    #         # 3.1 Accumulate previous decision score
+    #         # --------------------------------------------------------
+
+    #         if decision_score is not None:
+
+    #             if total_decision_score is None:
+    #                 total_decision_score = decision_score
+    #             else:
+    #                 total_decision_score = (
+    #                     total_decision_score
+    #                     + decision_score
+    #                 )
+
+    #         # --------------------------------------------------------
+    #         # 3.2 Get trajectory state
+    #         # --------------------------------------------------------
+
+    #         input_ids = item["input_ids"]
+    #         attention_mask = item["attention_mask"]
+    #         document_attention_mask = (
+    #             item["document_attention_mask"]
+    #         )
+
+    #         # --------------------------------------------------------
+    #         # 3.3 Skip decision-only trajectory state
+    #         # --------------------------------------------------------
+
+    #         if (
+    #             input_ids is None
+    #             or attention_mask is None
+    #         ):
+    #             continue
+
+    #         # --------------------------------------------------------
+    #         # 3.4 Forward model
+    #         # --------------------------------------------------------
+    #         outputs: ARTModelOutputWithPast = self.model(
+    #             input_ids=input_ids,
+    #             attention_mask=attention_mask,
+    #             position_ids=position_ids,
+    #             inputs_embeds=inputs_embeds,
+    #             past_key_values=None,
+    #             use_cache=False,
+    #             document_attention_mask=(
+    #                 document_attention_mask
+    #             ),
+    #             retrieval_decision=decision_score,
+    #             **kwargs,
+    #         )
+
+    #         hidden_states = outputs.last_hidden_state
+    #         decision_hidden_states = outputs.last_decision_hidden_state
+
+    #         # --------------------------------------------------------
+    #         # 3.5 Get logits for newly computed tokens only
+    #         # --------------------------------------------------------
+
+    #         current_sequence_length = (
+    #             hidden_states.shape[1]
+    #         )
+
+    #         new_hidden_states = hidden_states[
+    #             :,
+    #             computed_logits_length:current_sequence_length,
+    #             :,
+    #         ]
+
+    #         new_decision_hidden_states = decision_hidden_states[
+    #             :,
+    #             computed_logits_length:current_sequence_length,
+    #             :,
+    #         ]
+
+    #         new_logits = self.lm_head(
+    #             new_hidden_states
+    #         )
+
+    #         logits_buffer.append(new_logits)
+
+    #         computed_logits_length = (
+    #             current_sequence_length
+    #         )
+
+    #         # --------------------------------------------------------
+    #         # 3.6 Compute new retrieval decision
+    #         # --------------------------------------------------------
+
+    #         decision_score = (
+    #             self.retrieval_decision_head(
+    #             new_decision_hidden_states
+    #             )
+    #         )
+
+    #     # ============================================================
+    #     # 4. Accumulate final decision score
+    #     #
+    #     # If the last trajectory item is decision-only,
+    #     # its decision score has not been accumulated by
+    #     # the loop body, so add it here.
+    #     # ============================================================
+
+    #     if trajectory:
+
+    #         last_item = trajectory[-1]
+
+    #         if (
+    #             last_item["input_ids"] is None
+    #             or last_item["attention_mask"] is None
+    #         ):
+
+    #             if decision_score is not None:
+
+    #                 if total_decision_score is None:
+    #                     total_decision_score = decision_score
+    #                 else:
+    #                     total_decision_score = (
+    #                         total_decision_score
+    #                         + decision_score
+    #                     )
+
+    #     # ============================================================
+    #     # 5. Combine logits
+    #     # ============================================================
+
+    #     if not logits_buffer:
+    #         raise ValueError(
+    #             "Trajectory does not contain any valid "
+    #             "states for training."
+    #         )
+
+    #     logits = torch.cat(
+    #         logits_buffer,
+    #         dim=1,
+    #     )
+
+    #     assert logits.shape[1] == labels.shape[1], (
+    #         "Logits and labels must have the same sequence length: "
+    #         f"logits.shape={logits.shape}, "
+    #         f"labels.shape={labels.shape}"
+    #     )
+
+
+    #     # ============================================================
+    #     # 6. Handle empty retrieval cost
+    #     # ============================================================
+
+    #     if total_decision_score is None:
+    #         total_decision_score = logits.new_zeros(())
+
+    #     # ============================================================
+    #     # 7. Compute language modeling loss
+    #     # ============================================================
+
+    #     lm_loss = self.loss_function(
+    #         logits=logits,
+    #         labels=labels,
+    #         vocab_size=self.config.vocab_size,
+    #         **kwargs,
+    #     )
+
+    #     # ============================================================
+    #     # 8. Add retrieval cost
+    #     # ============================================================
+
+    #     loss = (
+    #         lm_loss
+    #         + RETRIEVAL_COST * total_decision_score.sum()
+    #     )
+
+    #     # ============================================================
+    #     # 9. Return
+    #     # ============================================================
+
+    #     return CausalLMOutputWithPast(
+    #         loss=loss,
+    #         logits=logits,
+    #         past_key_values=None,
+    #         hidden_states=None,
+    #         attentions=None,
+    #     )
+
     def forward_training(
         self,
-        question: str | None = None,
-        question_input_ids: torch.LongTensor | None = None,
-        answer_input_ids: torch.LongTensor | None = None,
-        attention_mask: torch.Tensor | None = None,
-        position_ids: torch.LongTensor | None = None,
-        past_key_values: Cache | None = None,
-        inputs_embeds: torch.FloatTensor | None = None,
-        labels: torch.LongTensor | None = None,
-        logits_to_keep: int | torch.Tensor = 0,
+        collect_outputs,
         **kwargs: Unpack[TransformersKwargs],
     ) -> CausalLMOutputWithPast:
 
         # ============================================================
-        # 1. Collect trajectory
+        # 1. Get trajectory data
         # ============================================================
 
-        self.gradient_checkpointing_disable()
-
-        with torch.no_grad():
-
-            collect_outputs = self.forward_collect(
-                question=question,
-                question_input_ids=question_input_ids,
-                answer_input_ids=answer_input_ids,
-                attention_mask=attention_mask,
-                position_ids=position_ids,
-                past_key_values=past_key_values,
-                inputs_embeds=inputs_embeds,
-                labels=labels,
-                logits_to_keep=logits_to_keep,
-                **kwargs,
-            )
-
-        trajectory = collect_outputs["trajectory"]
+        trajectory_items = collect_outputs["trajectory"]
         labels = collect_outputs["labels"]
-        self.retrieval_count_for_logging.append(
-            self.retrieval_count
-        )
 
         # ============================================================
-        # 2. Enable gradient checkpointing
-        # ============================================================
-
-        self.gradient_checkpointing_enable()
-
-        # ============================================================
-        # 3. Replay trajectory with gradient
+        # 2. Replay trajectory with gradient
         # ============================================================
 
         logits_buffer = []
 
-            # Number of tokens for which logits have already been collected.
+        # Number of tokens for which logits have already been collected.
         computed_logits_length = 0
 
         # Retrieval decision from the previous trajectory step.
@@ -1603,10 +1825,10 @@ class AttentionMixingProbeForCausalLM(
         # Sum of all retrieval decision scores.
         total_decision_score = None
 
-        for item in trajectory:
+        for item in trajectory_items:
 
             # --------------------------------------------------------
-            # 3.1 Accumulate previous decision score
+            # 2.1 Accumulate previous decision score
             # --------------------------------------------------------
 
             if decision_score is not None:
@@ -1620,7 +1842,7 @@ class AttentionMixingProbeForCausalLM(
                     )
 
             # --------------------------------------------------------
-            # 3.2 Get trajectory state
+            # 2.2 Get trajectory state
             # --------------------------------------------------------
 
             input_ids = item["input_ids"]
@@ -1630,7 +1852,7 @@ class AttentionMixingProbeForCausalLM(
             )
 
             # --------------------------------------------------------
-            # 3.3 Skip decision-only trajectory state
+            # 2.3 Skip decision-only trajectory state
             # --------------------------------------------------------
 
             if (
@@ -1640,27 +1862,26 @@ class AttentionMixingProbeForCausalLM(
                 continue
 
             # --------------------------------------------------------
-            # 3.4 Forward model
+            # 2.4 Forward model
             # --------------------------------------------------------
+
             outputs: ARTModelOutputWithPast = self.model(
                 input_ids=input_ids,
                 attention_mask=attention_mask,
-                position_ids=position_ids,
-                inputs_embeds=inputs_embeds,
-                past_key_values=None,
                 use_cache=False,
                 document_attention_mask=(
                     document_attention_mask
                 ),
                 retrieval_decision=decision_score,
-                **kwargs,
             )
 
             hidden_states = outputs.last_hidden_state
-            decision_hidden_states = outputs.last_decision_hidden_state
+            decision_hidden_states = (
+                outputs.last_decision_hidden_state
+            )
 
             # --------------------------------------------------------
-            # 3.5 Get logits for newly computed tokens only
+            # 2.5 Get logits for newly computed tokens only
             # --------------------------------------------------------
 
             current_sequence_length = (
@@ -1673,11 +1894,13 @@ class AttentionMixingProbeForCausalLM(
                 :,
             ]
 
-            new_decision_hidden_states = decision_hidden_states[
-                :,
-                computed_logits_length:current_sequence_length,
-                :,
-            ]
+            new_decision_hidden_states = (
+                decision_hidden_states[
+                    :,
+                    computed_logits_length:current_sequence_length,
+                    :,
+                ]
+            )
 
             new_logits = self.lm_head(
                 new_hidden_states
@@ -1690,30 +1913,33 @@ class AttentionMixingProbeForCausalLM(
             )
 
             # --------------------------------------------------------
-            # 3.6 Compute new retrieval decision
+            # 2.6 Compute new retrieval decision
             # --------------------------------------------------------
 
             decision_score = (
                 self.retrieval_decision_head(
-                new_decision_hidden_states
+                    new_decision_hidden_states
                 )
             )
 
+            if self.first_segment_retrieval_decision_score.get("training") is None:
+                self.first_segment_retrieval_decision_score["training"] = decision_score.item()
+
         # ============================================================
-        # 4. Accumulate final decision score
+        # 3. Accumulate final decision score
         #
         # If the last trajectory item is decision-only,
         # its decision score has not been accumulated by
         # the loop body, so add it here.
         # ============================================================
 
-        if trajectory:
+        if trajectory_items:
 
-            last_item = trajectory[-1]
+            last_item = trajectory_items[-1]
 
             if (
                 last_item["input_ids"] is None
-                or last_item["attention_mask"] is None
+                and last_item["attention_mask"] is None
             ):
 
                 if decision_score is not None:
@@ -1727,7 +1953,7 @@ class AttentionMixingProbeForCausalLM(
                         )
 
         # ============================================================
-        # 5. Combine logits
+        # 4. Combine logits
         # ============================================================
 
         if not logits_buffer:
@@ -1747,36 +1973,38 @@ class AttentionMixingProbeForCausalLM(
             f"labels.shape={labels.shape}"
         )
 
-
         # ============================================================
-        # 6. Handle empty retrieval cost
+        # 5. Handle empty retrieval cost
         # ============================================================
 
         if total_decision_score is None:
             total_decision_score = logits.new_zeros(())
 
         # ============================================================
-        # 7. Compute language modeling loss
+        # 6. Compute language modeling loss
         # ============================================================
 
         lm_loss = self.loss_function(
             logits=logits,
             labels=labels,
             vocab_size=self.config.vocab_size,
-            **kwargs,
         )
 
         # ============================================================
-        # 8. Add retrieval cost
+        # 7. Compute retrieval cost
         # ============================================================
+
+        retrieval_cost = self.compute_retrieval_cost(
+            total_decision_score
+        )
 
         loss = (
             lm_loss
-            + RETRIEVAL_COST * total_decision_score.sum()
+            + retrieval_cost
         )
 
         # ============================================================
-        # 9. Return
+        # 8. Return
         # ============================================================
 
         return CausalLMOutputWithPast(
