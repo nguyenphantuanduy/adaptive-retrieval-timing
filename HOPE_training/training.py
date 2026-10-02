@@ -13,7 +13,7 @@ from transformers import (
     AutoModelForCausalLM,
 )
 
-from demo_training.trainer import ARTTrainer
+from HOPE_training.trainer import ARTTrainer
 
 
 # ============================================================
@@ -68,7 +68,7 @@ MAX_GRAD_NORM = 1.0
 # Logging
 # ------------------------------------------------------------
 
-LOGGING_STEPS = 10
+LOGGING_STEPS = 1
 
 
 # ------------------------------------------------------------
