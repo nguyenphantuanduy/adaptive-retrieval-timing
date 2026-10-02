@@ -3,10 +3,12 @@ from __future__ import annotations
 import gc
 import math
 import random
+from pathlib import Path
 from typing import Dict, Any, List
 
 import torch
 from datasets import load_dataset, concatenate_datasets
+from huggingface_hub import HfApi
 from transformers import (
     AutoTokenizer,
     TrainingArguments,
@@ -38,10 +40,21 @@ SEED = 42
 
 
 # ------------------------------------------------------------
+# Hugging Face upload
+# ------------------------------------------------------------
+
+HF_REPO_ID = "adaptive-retrieval-timing/ART-HOPE"
+
+HF_REPO_TYPE = "model"
+
+HF_WEIGHT_FILE = "model.safetensors"
+
+
+# ------------------------------------------------------------
 # Training epochs
 # ------------------------------------------------------------
 
-NUM_TRAIN_EPOCHS = 0.5
+NUM_TRAIN_EPOCHS = 0.75
 
 
 # ------------------------------------------------------------
@@ -68,7 +81,7 @@ MAX_GRAD_NORM = 1.0
 # Logging
 # ------------------------------------------------------------
 
-LOGGING_STEPS = 1
+LOGGING_STEPS = 10
 
 
 # ------------------------------------------------------------
@@ -1082,6 +1095,149 @@ def print_gpu_memory(
 
 
 # ============================================================
+# HUGGING FACE UPLOAD
+# ============================================================
+
+def upload_final_model_to_hf() -> None:
+    """
+    Upload only the final model.safetensors to Hugging Face.
+
+    The repository already contains:
+        - ART model code
+        - config
+        - tokenizer
+        - other model files
+
+    Therefore this function only replaces:
+        model.safetensors
+    """
+
+    print()
+    print("=" * 80)
+    print("UPLOADING FINAL MODEL TO HUGGING FACE")
+    print("=" * 80)
+
+    local_model_dir = Path(
+        OUTPUT_DIR
+    )
+
+    weight_path = (
+        local_model_dir
+        / HF_WEIGHT_FILE
+    )
+
+    # ========================================================
+    # 1. Verify final weights exist.
+    # ========================================================
+
+    if not weight_path.exists():
+
+        raise FileNotFoundError(
+            "Final model weights were not found:\n"
+            f"{weight_path}\n\n"
+            "Training completed, but the expected "
+            "model.safetensors file does not exist."
+        )
+
+    print(
+        f"Local weights : "
+        f"{weight_path}"
+    )
+
+    print(
+        f"HF repository : "
+        f"{HF_REPO_ID}"
+    )
+
+    # ========================================================
+    # 2. File information.
+    # ========================================================
+
+    file_size_gb = (
+        weight_path.stat().st_size
+        / (1024 ** 3)
+    )
+
+    print(
+        f"Weight size   : "
+        f"{file_size_gb:.2f} GB"
+    )
+
+    # ========================================================
+    # 3. Connect to Hugging Face.
+    #
+    # HfApi() will use the currently authenticated HF
+    # credentials, e.g. `huggingface-cli login` or HF_TOKEN.
+    # ========================================================
+
+    print()
+    print("Connecting to Hugging Face...")
+
+    api = HfApi()
+
+    # ========================================================
+    # 4. Ensure repository exists.
+    # ========================================================
+
+    print()
+    print("Ensuring repository exists...")
+
+    api.create_repo(
+        repo_id=HF_REPO_ID,
+        repo_type=HF_REPO_TYPE,
+        exist_ok=True,
+    )
+
+    print(
+        "Repository ready."
+    )
+
+    # ========================================================
+    # 5. Upload model.safetensors.
+    # ========================================================
+
+    print()
+    print("=" * 80)
+    print("UPLOADING MODEL.SAFETENSORS")
+    print("=" * 80)
+
+    api.upload_file(
+        path_or_fileobj=str(weight_path),
+        path_in_repo=HF_WEIGHT_FILE,
+        repo_id=HF_REPO_ID,
+        repo_type=HF_REPO_TYPE,
+        commit_message=(
+            "Update final trained ART model weights"
+        ),
+    )
+
+    print()
+    print(
+        "✓ model.safetensors uploaded successfully."
+    )
+
+    # ========================================================
+    # 6. Done.
+    # ========================================================
+
+    print()
+    print("=" * 80)
+    print("HUGGING FACE UPLOAD COMPLETE")
+    print("=" * 80)
+
+    print()
+    print(
+        "Repository:"
+    )
+
+    print(
+        f"https://huggingface.co/{HF_REPO_ID}"
+    )
+
+    print("=" * 80)
+
+
+# ============================================================
 # MAIN
 # ============================================================
 
@@ -1586,6 +1742,12 @@ def main():
         ),
 
         # ----------------------------------------------------
+        # Ensure Trainer saves model.safetensors
+        # ----------------------------------------------------
+
+        save_safetensors=True,
+
+        # ----------------------------------------------------
         # ART cache compatibility
         # ----------------------------------------------------
 
@@ -1958,12 +2120,12 @@ def main():
     print("=" * 80)
 
     # ========================================================
-    # 24. SAVE FINAL MODEL
+    # 24. SAVE FINAL MODEL LOCALLY
     # ========================================================
 
     print()
     print("=" * 80)
-    print("SAVING FINAL MODEL")
+    print("SAVING FINAL MODEL LOCALLY")
     print("=" * 80)
 
     trainer.save_model(
@@ -1979,10 +2141,92 @@ def main():
         f"{OUTPUT_DIR}"
     )
 
+    # ========================================================
+    # 25. VERIFY MODEL.SAFETENSORS
+    # ========================================================
+
+    print()
+    print("=" * 80)
+    print("VERIFYING FINAL MODEL WEIGHTS")
+    print("=" * 80)
+
+    final_weight_path = (
+        Path(OUTPUT_DIR)
+        / HF_WEIGHT_FILE
+    )
+
+    if not final_weight_path.exists():
+
+        raise FileNotFoundError(
+            "Training finished and local model was saved, "
+            "but model.safetensors was not found:\n"
+            f"{final_weight_path}"
+        )
+
+    final_weight_size_gb = (
+        final_weight_path.stat().st_size
+        / (1024 ** 3)
+    )
+
+    print(
+        "✓ model.safetensors exists."
+    )
+
+    print(
+        f"Path: "
+        f"{final_weight_path}"
+    )
+
+    print(
+        f"Size: "
+        f"{final_weight_size_gb:.2f} GB"
+    )
+
     print("=" * 80)
 
     # ========================================================
-    # 25. CLEANUP
+    # 26. UPLOAD FINAL MODEL TO HUGGING FACE
+    # ========================================================
+
+    print()
+    print("=" * 80)
+    print("14. UPLOADING FINAL MODEL TO HUGGING FACE")
+    print("=" * 80)
+
+    try:
+
+        upload_final_model_to_hf()
+
+    except Exception as error:
+
+        print()
+        print("=" * 80)
+        print("HUGGING FACE UPLOAD FAILED")
+        print("=" * 80)
+
+        print(
+            f"Error: {error}"
+        )
+
+        print()
+        print(
+            "IMPORTANT:"
+        )
+
+        print(
+            "The trained model is still available locally at:"
+        )
+
+        print(
+            f"{Path(OUTPUT_DIR).resolve()}"
+        )
+
+        print("=" * 80)
+
+        raise
+
+    # ========================================================
+    # 27. CLEANUP
     # ========================================================
 
     print()
@@ -2008,7 +2252,7 @@ def main():
 
     print()
     print("=" * 80)
-    print("TRAINING COMPLETE")
+    print("TRAINING + HUGGING FACE UPLOAD COMPLETE")
     print("=" * 80)
 
 
