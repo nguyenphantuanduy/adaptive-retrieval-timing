@@ -153,7 +153,6 @@ class AttentionMixingProbePreTrainedModel(Qwen2PreTrainedModel):
     _supports_attention_backend = False
 
 
-@auto_docstring
 class AttentionMixingProbeModel(AttentionMixingProbePreTrainedModel):
     def __init__(self, config: Qwen2Config):
         super().__init__(config)
@@ -201,7 +200,6 @@ class AttentionMixingProbeModel(AttentionMixingProbePreTrainedModel):
 
     @merge_with_config_defaults
     @capture_outputs
-    @auto_docstring
     def forward(
         self,
         input_ids: torch.LongTensor | None = None,
@@ -366,7 +364,6 @@ class RetrievalDecisionHead(nn.Module):
 from .musique_retrieval_db import MuSiQueRetrievalDB
 
 
-@auto_docstring
 class AttentionMixingProbeForCausalLM(
     AttentionMixingProbePreTrainedModel,
     GenerationMixin,
@@ -484,7 +481,6 @@ class AttentionMixingProbeForCausalLM(
     # =========================================================================
 
     @can_return_tuple
-    @auto_docstring
     def forward(
         self,
         input_ids: torch.LongTensor | None = None,
