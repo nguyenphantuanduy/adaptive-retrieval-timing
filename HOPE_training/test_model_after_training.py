@@ -17,7 +17,7 @@ TOKENIZER_PATH = "Qwen/Qwen2.5-3B-Instruct"
 DTYPE = torch.bfloat16
 
 QUESTION = (
-    'When was the region that lies to the north of what used to be known as the "Near East" and the location of Operation Earnest Will established?'
+    'What watercourse is the river on which the Lostock Dam is located the mouth of?'
 )
 
 SYSTEM_PROMPT = """You are a helpful assistant that can solve the given question step by step.

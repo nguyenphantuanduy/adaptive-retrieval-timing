@@ -45,12 +45,9 @@ from .utils import (
 )
 
 THRESHOLD = 0.4297
-# RETRIEVAL_COST = 0.095349
-RETRIEVAL_COST_L = -1.494137
-RETRIEVAL_COST_U = 0.199348
-RETRIEVAL_COST_K = 17.432991
-RETRIEVAL_COST_C = 0.463704
-RETRIEVAL_COST_D0 = 0.579246
+RETRIEVAL_COST = 0.1
+# THRESHOLD = 0.5
+# RETRIEVAL_COST = 0.05
 MAX_RETRIEVAL_CONTEXT_TOKENS = 600
 MAX_RETRIEVAL_COUNT = 4
 MAX_EXPLORATION_PROBABILITY = 0.5
@@ -74,71 +71,84 @@ def decrease_probability(
 ) -> float:
     return MIN_EXPLORATION_PROBABILITY
 
+
+# ============================================================
+# Exponential saturation retrieval cost
+# ============================================================
+
+# RETRIEVAL_COST_L = -3.697402
+# RETRIEVAL_COST_U = 0.278405
+# RETRIEVAL_COST_K = 4.572680
+# RETRIEVAL_COST_D0 = 0.545356
+
+
+# def compute_retrieval_cost(
+#         total_decision_score: torch.Tensor,
+#     ) -> torch.Tensor:
+
+#         d = total_decision_score
+
+#         # ====================================================
+#         # Antiderivative G(d)
+#         #
+#         # g(d) = L + (U - L) * (1 - exp(-k*d))
+#         #       = U - (U - L) * exp(-k*d)
+#         #
+#         # G'(d) = g(d)
+#         # ====================================================
+
+#         exp_d = torch.exp(
+#             -RETRIEVAL_COST_K * d
+#         )
+
+#         exp_d0 = torch.exp(
+#             torch.tensor(
+#                 -RETRIEVAL_COST_K
+#                 * RETRIEVAL_COST_D0,
+#                 device=d.device,
+#                 dtype=d.dtype,
+#             )
+#         )
+
+#         G_d = (
+#             RETRIEVAL_COST_U
+#             * (
+#                 d
+#                 - RETRIEVAL_COST_D0
+#             )
+#             + (
+#                 (
+#                     RETRIEVAL_COST_U
+#                     - RETRIEVAL_COST_L
+#                 )
+#                 / RETRIEVAL_COST_K
+#             )
+#             * (
+#                 exp_d
+#                 - exp_d0
+#             )
+#         )
+
+#         # ====================================================
+#         # Piecewise retrieval cost
+#         #
+#         # d < D0  -> -G(d)
+#         # d >= D0 -> 0.05 * d
+#         # ====================================================
+
+#         retrieval_cost = torch.where(
+#             d < RETRIEVAL_COST_D0,
+#             -G_d,
+#             0.05 * d,
+#         )
+
+#         return retrieval_cost.sum()
+
 def compute_retrieval_cost(
         total_decision_score: torch.Tensor,
     ) -> torch.Tensor:
 
-        d = total_decision_score
-
-        # ====================================================
-        # Antiderivative G(d)
-        # ====================================================
-
-        numerator = (
-            1.0
-            + torch.exp(
-                RETRIEVAL_COST_K
-                * (d - RETRIEVAL_COST_C)
-            )
-        )
-
-        denominator = (
-            1.0
-            + torch.exp(
-                torch.tensor(
-                    RETRIEVAL_COST_K
-                    * (
-                        RETRIEVAL_COST_D0
-                        - RETRIEVAL_COST_C
-                    ),
-                    device=d.device,
-                    dtype=d.dtype,
-                )
-            )
-        )
-
-        G_d = (
-            RETRIEVAL_COST_L
-            * (
-                d
-                - RETRIEVAL_COST_D0
-            )
-            + (
-                (
-                    RETRIEVAL_COST_U
-                    - RETRIEVAL_COST_L
-                )
-                / RETRIEVAL_COST_K
-            )
-            * torch.log(
-                numerator / denominator
-            )
-        )
-
-        # ====================================================
-        # Piecewise retrieval cost
-        #
-        # d < D0  -> -G(d)
-        # d >= D0 -> 0
-        # ====================================================
-
-        retrieval_cost = torch.where(
-            d < RETRIEVAL_COST_D0,
-            -G_d,
-            torch.zeros_like(d),
-        )
-
-        return retrieval_cost.sum()
+    return RETRIEVAL_COST * total_decision_score.sum()
 
 class AttentionMixingProbePreTrainedModel(Qwen2PreTrainedModel):
     _no_split_modules = [
@@ -1151,6 +1161,10 @@ class AttentionMixingProbeForCausalLM(
                     retrieval_decision=decision_score,
                 )
 
+        self.retrieval_count_for_logging.append(
+            self.retrieval_count
+        )
+        
         return {
             "labels": labels,
             "trajectory": trajectory,
@@ -1893,7 +1907,7 @@ class AttentionMixingProbeForCausalLM(
                 ):
             
                     if decision_score is not None:
-                        retrieval_cost += 0.1 * decision_score.sum()    
+                        retrieval_cost += RETRIEVAL_COST * decision_score.sum()    
     
             loss = (
                 lm_loss
