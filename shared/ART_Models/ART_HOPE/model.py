@@ -46,7 +46,7 @@ from .utils import (
 )
 
 THRESHOLD = 0.4297
-MAX_RETRIEVAL_CONTEXT_TOKENS = 600
+MAX_RETRIEVAL_CONTEXT_TOKENS = 500
 MAX_RETRIEVAL_COUNT = 4
 MAX_EXPLORATION_PROBABILITY = 0.5
 MIN_EXPLORATION_PROBABILITY = 0.1
@@ -523,7 +523,7 @@ class AttentionMixingProbeForCausalLM(
             )
         )
 
-        return -F_d.sum()
+        return -F_d.sum() + 0.1 * total_decision_score.sum()
 
     # =========================================================================
     # Forward dispatcher
@@ -1933,25 +1933,6 @@ class AttentionMixingProbeForCausalLM(
         # the loop body, so add it here.
         # ============================================================
 
-        if trajectory_items:
-
-            last_item = trajectory_items[-1]
-
-            if (
-                last_item["input_ids"] is None
-                and last_item["attention_mask"] is None
-            ):
-
-                if decision_score is not None:
-
-                    if total_decision_score is None:
-                        total_decision_score = decision_score
-                    else:
-                        total_decision_score = (
-                            total_decision_score
-                            + decision_score
-                        )
-
         # ============================================================
         # 4. Combine logits
         # ============================================================
@@ -1997,6 +1978,18 @@ class AttentionMixingProbeForCausalLM(
         retrieval_cost = self.compute_retrieval_cost(
             total_decision_score
         )
+
+        if trajectory_items:
+        
+            last_item = trajectory_items[-1]
+        
+            if (
+                last_item["input_ids"] is None
+                and last_item["attention_mask"] is None
+            ):
+        
+                if decision_score is not None:
+                    retrieval_cost += 0.1 * decision_score.sum()    
 
         loss = (
             lm_loss

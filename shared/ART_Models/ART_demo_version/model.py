@@ -1196,9 +1196,7 @@ class AttentionMixingProbeForCausalLM(
         outputs: BaseModelOutputWithPast = self.model(
             input_ids=input_ids,
             attention_mask=attention_mask,
-            position_ids=position_ids,
             past_key_values=past_key_values,
-            inputs_embeds=inputs_embeds,
             use_cache=True,
             document_attention_mask=document_attention_mask,
             retrieval_decision=retrieval_decision,
