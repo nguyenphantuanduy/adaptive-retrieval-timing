@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import json
 import re
 from pathlib import Path
@@ -15,40 +16,105 @@ from REVIVE_training.utils import (
 # Configuration
 # ============================================================
 
-INPUT_FILE = Path(
-    "REVIVE_training/result/rsearch_musique_art_results.jsonl"
-)
-
-OUTPUT_FILE = Path(
-    "REVIVE_training/result/rsearch_musique_art_metrics.json"
-)
-
-# Number of samples to print when <answer> tag is missing
 MAX_DEBUG_SAMPLES = 10
+
+
+# ============================================================
+# Argument parser
+# ============================================================
+
+def parse_args():
+
+    parser = argparse.ArgumentParser(
+        description=(
+            "Evaluate ART results on MuSiQue "
+            "using Acc, F1, and EM."
+        )
+    )
+
+    parser.add_argument(
+        "--filename",
+        type=Path,
+        required=True,
+        help="Input ART evaluation JSONL file.",
+    )
+
+    return parser.parse_args()
+
+
+# ============================================================
+# Build output path
+# ============================================================
+
+def get_output_file(
+    input_file: Path,
+) -> Path:
+
+    # --------------------------------------------------------
+    # Replace "result" directory with "metrics"
+    # --------------------------------------------------------
+
+    parts = list(input_file.parts)
+
+    if "result" in parts:
+
+        result_index = (
+            len(parts)
+            - 1
+            - parts[::-1].index("result")
+        )
+
+        parts[result_index] = "metrics"
+
+        output_file = Path(*parts)
+
+    else:
+
+        output_file = (
+            input_file.parent.parent
+            / "metrics"
+            / input_file.name
+        )
+
+    # --------------------------------------------------------
+    # Replace filename suffix
+    # --------------------------------------------------------
+
+    if output_file.name.endswith(
+        "_results.jsonl"
+    ):
+
+        output_name = (
+            output_file.name[
+                :-len("_results.jsonl")
+            ]
+            + "_metrics.json"
+        )
+
+    elif output_file.suffix == ".jsonl":
+
+        output_name = (
+            output_file.stem
+            + "_metrics.json"
+        )
+
+    else:
+
+        output_name = (
+            output_file.stem
+            + "_metrics.json"
+        )
+
+    return output_file.parent / output_name
 
 
 # ============================================================
 # Extract answer
 # ============================================================
 
-def extract_answer(text: str) -> tuple[str, bool]:
-    """
-    Extract the final answer from <answer>...</answer>.
-
-    Same logic as R-Search:
-
-        - Find all <answer>...</answer>
-        - Take the last match
-        - Strip whitespace
-        - If no match, use the whole response
-
-    Returns:
-        answer:
-            Extracted answer string.
-
-        has_answer_tag:
-            True if <answer>...</answer> was found.
-    """
+def extract_answer(
+    text: str,
+) -> tuple[str, bool]:
 
     matches = list(
         re.finditer(
@@ -59,7 +125,11 @@ def extract_answer(text: str) -> tuple[str, bool]:
     )
 
     if matches:
+
+        # Same behavior as R-Search:
+        # use the final <answer>...</answer>
         answer = matches[-1].group(1).strip()
+
         return answer, True
 
     # Same fallback behavior as R-Search
@@ -70,7 +140,10 @@ def extract_answer(text: str) -> tuple[str, bool]:
 # Load results
 # ============================================================
 
-def load_results(path: Path) -> list[dict]:
+def load_results(
+    path: Path,
+) -> list[dict]:
+
     results = []
 
     with path.open(
@@ -89,18 +162,22 @@ def load_results(path: Path) -> list[dict]:
                 continue
 
             try:
+
                 data = json.loads(line)
 
             except json.JSONDecodeError:
+
                 print(
                     f"WARNING: Could not parse line "
                     f"{line_number}"
                 )
+
                 continue
 
-            # Ignore metric/result lines if the file
-            # already contains one.
+            # Ignore files that do not contain
+            # ART generated answers.
             if "pure_art_answer" not in data:
+
                 continue
 
             results.append(data)
@@ -114,22 +191,34 @@ def load_results(path: Path) -> list[dict]:
 
 def main():
 
+    args = parse_args()
+
+    input_file = args.filename
+
+    output_file = get_output_file(
+        input_file
+    )
+
     # --------------------------------------------------------
     # Check input
     # --------------------------------------------------------
 
-    if not INPUT_FILE.exists():
+    if not input_file.exists():
+
         raise FileNotFoundError(
-            f"Input file not found:\n{INPUT_FILE}"
+            f"Input file not found:\n{input_file}"
         )
 
     # --------------------------------------------------------
     # Load samples
     # --------------------------------------------------------
 
-    results = load_results(INPUT_FILE)
+    results = load_results(
+        input_file
+    )
 
     if not results:
+
         raise ValueError(
             "No valid ART evaluation samples found."
         )
@@ -141,7 +230,11 @@ def main():
     print("=" * 80)
 
     print(
-        f"Input file : {INPUT_FILE}"
+        f"Input file : {input_file}"
+    )
+
+    print(
+        f"Output file: {output_file}"
     )
 
     print(
@@ -164,7 +257,9 @@ def main():
 
     for result in results:
 
-        generated_text = result["pure_art_answer"]
+        generated_text = result[
+            "pure_art_answer"
+        ]
 
         # ----------------------------------------------------
         # Extract answer
@@ -184,9 +279,12 @@ def main():
 
             # Keep a few examples for debugging
             if len(debug_no_answer) < MAX_DEBUG_SAMPLES:
+
                 debug_no_answer.append(
                     {
-                        "id": result.get("id"),
+                        "id": result.get(
+                            "id"
+                        ),
                         "question": result.get(
                             "question",
                             "",
@@ -203,21 +301,32 @@ def main():
         # Gold answers
         # ----------------------------------------------------
 
-        ground_truths = result["golden_answers"]
+        ground_truths = result[
+            "golden_answers"
+        ]
 
-        predictions.append(prediction)
-        answers.append(ground_truths)
+        predictions.append(
+            prediction
+        )
+
+        answers.append(
+            ground_truths
+        )
 
     # ========================================================
     # Answer extraction statistics
     # ========================================================
 
     answer_tag_percentage = (
-        100.0 * answer_tag_count / total_samples
+        100.0
+        * answer_tag_count
+        / total_samples
     )
 
     no_answer_tag_percentage = (
-        100.0 * no_answer_tag_count / total_samples
+        100.0
+        * no_answer_tag_count
+        / total_samples
     )
 
     print("-" * 80)
@@ -244,10 +353,12 @@ def main():
 
         print()
         print("-" * 80)
+
         print(
             f"SAMPLES WITHOUT <answer> TAG "
             f"(showing up to {MAX_DEBUG_SAMPLES})"
         )
+
         print("-" * 80)
 
         for i, sample in enumerate(
@@ -256,6 +367,7 @@ def main():
         ):
 
             print()
+
             print(
                 f"[{i}] ID={sample['id']}"
             )
@@ -349,12 +461,12 @@ def main():
         },
     }
 
-    OUTPUT_FILE.parent.mkdir(
+    output_file.parent.mkdir(
         parents=True,
         exist_ok=True,
     )
 
-    with OUTPUT_FILE.open(
+    with output_file.open(
         "w",
         encoding="utf-8",
     ) as f:
@@ -367,7 +479,7 @@ def main():
         )
 
     print(
-        f"Saved metrics to: {OUTPUT_FILE}"
+        f"Saved metrics to: {output_file}"
     )
 
 
