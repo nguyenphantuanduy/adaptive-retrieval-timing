@@ -21,9 +21,9 @@ TOKENIZER_REPO = "Qwen/Qwen2.5-3B-Instruct"
 DTYPE = torch.bfloat16
 MAX_NEW_TOKENS = 512
 
-SYSTEM_PROMPT = """You are a helpful assistant that can solve the given question step by step. 
-For each step, start by explaining your thought process. 
-If additional information is needed, the system will perform retrieval and return the top search results within <observation> and </observation>. Continue your reasoning using the retrieved information. 
+SYSTEM_PROMPT = """You are a helpful assistant that can solve the given question step by step.
+For each step, start by explaining your thought process.
+If additional information is needed, the system will perform retrieval and return the top search results within <observation> and </observation>. Continue your reasoning using the retrieved information.
 When you know the final answer, provide the final answer within <answer> and </answer> tags."""
 
 
@@ -79,6 +79,8 @@ print("Loading ART model...")
 model = AutoModelForCausalLM.from_pretrained(
     MODEL_REPO,
     trust_remote_code=True,
+    force_download=True,
+    revision="main",
     dtype=DTYPE,
     attn_implementation="eager",
 )
@@ -90,7 +92,7 @@ print("Model loaded.")
 
 
 # ============================================================
-# 5. Build chat prompt
+# 5. Build chat messages
 # ============================================================
 
 messages = [
@@ -104,33 +106,94 @@ messages = [
     },
 ]
 
-prompt = tokenizer.apply_chat_template(
-    messages,
-    tokenize=False,
-    add_generation_prompt=True,
-)
-
 
 # ============================================================
 # 6. Tokenize
+#    SAME approach as working Kaggle cell
 # ============================================================
 
-inputs = tokenizer(
-    prompt,
+inputs = tokenizer.apply_chat_template(
+    messages,
+    tokenize=True,
+    add_generation_prompt=True,
     return_tensors="pt",
 )
 
-print("\nTokenizer outputs:")
-print("  keys:", inputs.keys())
-print("  input_ids shape:", inputs["input_ids"].shape)
-print("  attention_mask shape:", inputs["attention_mask"].shape)
 
-input_ids = inputs["input_ids"].to(device)
-attention_mask = inputs["attention_mask"].to(device)
+# ------------------------------------------------------------
+# Handle Tensor / BatchEncoding
+# ------------------------------------------------------------
+
+if isinstance(inputs, torch.Tensor):
+
+    input_ids = inputs
+
+    # Same behavior as Kaggle:
+    # all current prompt tokens are valid tokens.
+    attention_mask = torch.ones_like(
+        input_ids,
+        dtype=torch.long,
+    )
+
+else:
+
+    input_ids = inputs["input_ids"]
+
+    attention_mask = inputs.get(
+        "attention_mask",
+        None,
+    )
+
+    # Safety fallback
+    if attention_mask is None:
+        attention_mask = torch.ones_like(
+            input_ids,
+            dtype=torch.long,
+        )
+
+
+# ------------------------------------------------------------
+# Move to device
+# ------------------------------------------------------------
+
+input_ids = input_ids.to(device)
+attention_mask = attention_mask.to(device)
 
 
 # ============================================================
-# 7. Reset ART retrieval state
+# 7. Debug tokenizer output
+# ============================================================
+
+print("\nTokenizer outputs:")
+
+print(
+    "  input_ids:",
+    input_ids.shape,
+)
+
+print(
+    "  attention_mask:",
+    attention_mask.shape,
+)
+
+print(
+    "  attention_mask dtype:",
+    attention_mask.dtype,
+)
+
+print(
+    "  attention_mask device:",
+    attention_mask.device,
+)
+
+print(
+    "  attention_mask unique:",
+    attention_mask.unique(),
+)
+
+
+# ============================================================
+# 8. Reset ART retrieval state
 # ============================================================
 
 if hasattr(model, "query"):
@@ -141,7 +204,7 @@ if hasattr(model, "doc"):
 
 
 # ============================================================
-# 8. Generation
+# 9. Generation
 # ============================================================
 
 print("\nGenerating...")
@@ -157,7 +220,7 @@ with torch.inference_mode():
 
 
 # ============================================================
-# 9. Decode generated response
+# 10. Decode generated response
 # ============================================================
 
 prompt_length = input_ids.shape[1]
@@ -174,7 +237,7 @@ generated_text = tokenizer.decode(
 
 
 # ============================================================
-# 10. Retrieve ART queries
+# 11. Retrieve ART queries
 # ============================================================
 
 if hasattr(model, "query") and model.query:
@@ -184,7 +247,7 @@ else:
 
 
 # ============================================================
-# 11. Retrieve ART documents
+# 12. Retrieve ART documents
 # ============================================================
 
 if hasattr(model, "doc") and model.doc:
@@ -194,7 +257,7 @@ else:
 
 
 # ============================================================
-# 12. Print result
+# 13. Print result
 # ============================================================
 
 print("\n" + "=" * 80)
@@ -208,14 +271,25 @@ print("\nGenerated answer:")
 print(generated_text)
 
 print("\nART queries:")
-for i, query in enumerate(queries, start=1):
+
+for i, query in enumerate(
+    queries,
+    start=1,
+):
     print(f"  [{i}] {query}")
 
-print(f"\nART passages: {len(passages)}")
 
-for i, passage in enumerate(passages, start=1):
+print(
+    f"\nART passages: {len(passages)}"
+)
+
+for i, passage in enumerate(
+    passages,
+    start=1,
+):
     print(f"\n--- Passage {i} ---")
     print(passage)
+
 
 print("\n" + "=" * 80)
 print("DONE")

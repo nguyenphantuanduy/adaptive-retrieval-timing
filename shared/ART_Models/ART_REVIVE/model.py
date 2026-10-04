@@ -523,6 +523,8 @@ class AttentionMixingProbeForCausalLM(
         **kwargs: Unpack[TransformersKwargs],
     ) -> CausalLMOutputWithPast:
 
+        print("kkkkkkkk", input_ids)
+        print("hhhhhhhhh", attention_mask)
         # =====================================================================
         # TRAINING
         # =====================================================================
