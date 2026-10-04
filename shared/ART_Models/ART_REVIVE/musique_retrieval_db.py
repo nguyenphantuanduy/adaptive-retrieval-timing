@@ -232,6 +232,7 @@ class MuSiQueRetrievalDB:
         top_k: Optional[int] = None,
         max_passage_tokens: int = -1,
         tokenizer=None,
+        return_passages: bool = False,
     ) -> str:
         """
         Retrieve the top-k passages for a query and return them as ONE
@@ -323,7 +324,12 @@ class MuSiQueRetrievalDB:
         # Add observation markers AFTER truncation
         # --------------------------------------------------------------
 
-        return append_retrieval_observation(passages)
+        observation =  append_retrieval_observation(passages)
+
+        if return_passages:
+            return observation, passage_parts
+
+        return observation
         
 
     def search_with_metadata(

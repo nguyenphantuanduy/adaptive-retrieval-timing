@@ -510,7 +510,8 @@ class AttentionMixingProbeForCausalLM(
         # =====================================================================
         # ART-specific inputs
         # =====================================================================
-
+        retrieval_topk: int = 3,
+        max_retrieval_context_tokens: int = MAX_RETRIEVAL_CONTEXT_TOKENS,
         question: str | None = None,
         # question_input_ids: torch.LongTensor | None = None,
         # answer_input_ids: torch.LongTensor | None = None,
@@ -560,6 +561,8 @@ class AttentionMixingProbeForCausalLM(
             question=question,
             document_attention_mask=document_attention_mask,
             retrieval_decision=retrieval_decision,
+            retrieval_topk=retrieval_topk,
+            max_retrieval_context_tokens=max_retrieval_context_tokens,
             **kwargs,
         )
     
@@ -1173,6 +1176,8 @@ class AttentionMixingProbeForCausalLM(
     def forward_generate(
         self,
         input_ids: torch.LongTensor | None = None,
+        retrieval_topk: int = 3,
+        max_retrieval_context_tokens: int = MAX_RETRIEVAL_CONTEXT_TOKENS,
 
         # =====================================================================
         # Standard forward inputs
@@ -1352,12 +1357,14 @@ class AttentionMixingProbeForCausalLM(
                 # 6.2.2 Retrieve
                 # -------------------------------------------------------------
 
-                retrieval_text = self._get_retriever().search(
+                retrieval_text, passages = self._get_retriever().search(
                     query=retrieval_query,
-                    max_passage_tokens=MAX_RETRIEVAL_CONTEXT_TOKENS,
+                    max_passage_tokens=max_retrieval_context_tokens,
                     tokenizer=self._get_tokenizer(),
+                    top_k=retrieval_topk,
+                    return_passages=True,
                 )
-                self.doc.append(retrieval_text)
+                self.doc.extend(passages)
 
                 self.retrieval_count += 1
 
