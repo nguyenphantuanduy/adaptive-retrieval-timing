@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 import torch
@@ -110,6 +109,7 @@ messages = [
 
 # ============================================================
 # 6. Tokenize
+#    SAME approach as working Kaggle cell
 # ============================================================
 
 inputs = tokenizer.apply_chat_template(
@@ -128,177 +128,72 @@ if isinstance(inputs, torch.Tensor):
 
     input_ids = inputs
 
+    # Same behavior as Kaggle:
+    # all current prompt tokens are valid tokens.
+    attention_mask = torch.ones_like(
+        input_ids,
+        dtype=torch.long,
+    )
+
 else:
 
     input_ids = inputs["input_ids"]
 
-
-# ------------------------------------------------------------
-# Move input_ids to device
-# ------------------------------------------------------------
-
-input_ids = input_ids.to(device)
-
-
-# ============================================================
-# 7. DEBUG ATTENTION MASK
-#
-# IMPORTANT:
-# This is intentionally NOT the normal all-ones mask.
-#
-# Pattern:
-#
-#   1 1 1 1 1  0 0 0 0 ... 0  1 1 1 1 1
-#
-# This is ONLY for debugging whether the mask survives
-# the GenerationMixin -> _prefill -> prepare_inputs_for_generation
-# -> forward pipeline.
-# ============================================================
-
-attention_mask = torch.zeros_like(
-    input_ids,
-    dtype=torch.long,
-)
-
-# First 5 tokens are valid
-attention_mask[:, :5] = 1
-
-# Last 5 tokens are valid
-attention_mask[:, -5:] = 1
-
-attention_mask = attention_mask.to(device)
-
-
-# ============================================================
-# 8. Debug tokenizer / input tensors
-# ============================================================
-
-print("\n" + "=" * 80)
-print("INPUT DEBUG")
-print("=" * 80)
-
-print(
-    "input_ids:",
-    input_ids.shape,
-)
-
-print(
-    "attention_mask:",
-    attention_mask.shape,
-)
-
-print(
-    "attention_mask dtype:",
-    attention_mask.dtype,
-)
-
-print(
-    "attention_mask device:",
-    attention_mask.device,
-)
-
-print(
-    "attention_mask unique:",
-    attention_mask.unique(),
-)
-
-print(
-    "attention_mask:",
-    attention_mask,
-)
-
-print(
-    "attention_mask sum:",
-    attention_mask.sum().item(),
-)
-
-print(
-    "attention_mask expected sum:",
-    min(10, input_ids.shape[1]),
-)
-
-
-# ============================================================
-# 9. Verify prepare_inputs_for_generation DIRECTLY
-#
-# This checks the function BEFORE generate() is involved.
-# ============================================================
-
-print("\n" + "=" * 80)
-print("DIRECT prepare_inputs_for_generation DEBUG")
-print("=" * 80)
-
-try:
-
-    prepared_inputs = model.prepare_inputs_for_generation(
-        input_ids=input_ids,
-        attention_mask=attention_mask,
-        is_first_iteration=True,
-    )
-
-    print(
-        "prepared_inputs keys:",
-        prepared_inputs.keys(),
-    )
-
-    prepared_attention_mask = prepared_inputs.get(
+    attention_mask = inputs.get(
         "attention_mask",
         None,
     )
 
-    print(
-        "prepared attention_mask:",
-        prepared_attention_mask,
-    )
-
-    if prepared_attention_mask is not None:
-
-        print(
-            "prepared attention_mask shape:",
-            prepared_attention_mask.shape,
+    # Safety fallback
+    if attention_mask is None:
+        attention_mask = torch.ones_like(
+            input_ids,
+            dtype=torch.long,
         )
 
-        print(
-            "prepared attention_mask dtype:",
-            prepared_attention_mask.dtype,
-        )
 
-        print(
-            "prepared attention_mask device:",
-            prepared_attention_mask.device,
-        )
+# ------------------------------------------------------------
+# Move to device
+# ------------------------------------------------------------
 
-        print(
-            "prepared attention_mask unique:",
-            prepared_attention_mask.unique(),
-        )
-
-        print(
-            "prepared attention_mask sum:",
-            prepared_attention_mask.sum().item(),
-        )
-
-    else:
-
-        print(
-            "WARNING: prepare_inputs_for_generation "
-            "returned attention_mask=None"
-        )
-
-except Exception as e:
-
-    print(
-        "prepare_inputs_for_generation FAILED:"
-    )
-
-    print(
-        type(e).__name__,
-        str(e),
-    )
+input_ids = input_ids.to(device)
+attention_mask = attention_mask.to(device)
 
 
 # ============================================================
-# 10. Reset ART retrieval state
+# 7. Debug tokenizer output
+# ============================================================
+
+print("\nTokenizer outputs:")
+
+print(
+    "  input_ids:",
+    input_ids.shape,
+)
+
+print(
+    "  attention_mask:",
+    attention_mask.shape,
+)
+
+print(
+    "  attention_mask dtype:",
+    attention_mask.dtype,
+)
+
+print(
+    "  attention_mask device:",
+    attention_mask.device,
+)
+
+print(
+    "  attention_mask unique:",
+    attention_mask.unique(),
+)
+
+
+# ============================================================
+# 8. Reset ART retrieval state
 # ============================================================
 
 if hasattr(model, "query"):
@@ -309,12 +204,10 @@ if hasattr(model, "doc"):
 
 
 # ============================================================
-# 11. Generation
+# 9. Generation
 # ============================================================
 
-print("\n" + "=" * 80)
-print("GENERATING")
-print("=" * 80)
+print("\nGenerating...")
 
 with torch.inference_mode():
 
@@ -327,7 +220,7 @@ with torch.inference_mode():
 
 
 # ============================================================
-# 12. Decode generated response
+# 10. Decode generated response
 # ============================================================
 
 prompt_length = input_ids.shape[1]
@@ -344,33 +237,27 @@ generated_text = tokenizer.decode(
 
 
 # ============================================================
-# 13. Retrieve ART queries
+# 11. Retrieve ART queries
 # ============================================================
 
 if hasattr(model, "query") and model.query:
-
     queries = list(model.query)
-
 else:
-
     queries = []
 
 
 # ============================================================
-# 14. Retrieve ART documents
+# 12. Retrieve ART documents
 # ============================================================
 
 if hasattr(model, "doc") and model.doc:
-
     passages = list(model.doc)
-
 else:
-
     passages = []
 
 
 # ============================================================
-# 15. Print result
+# 13. Print result
 # ============================================================
 
 print("\n" + "=" * 80)
@@ -389,10 +276,7 @@ for i, query in enumerate(
     queries,
     start=1,
 ):
-
-    print(
-        f"  [{i}] {query}"
-    )
+    print(f"  [{i}] {query}")
 
 
 print(
@@ -403,11 +287,7 @@ for i, passage in enumerate(
     passages,
     start=1,
 ):
-
-    print(
-        f"\n--- Passage {i} ---"
-    )
-
+    print(f"\n--- Passage {i} ---")
     print(passage)
 
 
