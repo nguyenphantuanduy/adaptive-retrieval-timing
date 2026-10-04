@@ -32,7 +32,7 @@ DEMONSTRATION_FILE = Path(
 
 OUTPUT_FILE = Path(
     "REVIVE_training/result/"
-    "rsearch_musique_art_results.jsonl"
+    "rsearch_musique_art_with_demonstrations_results.jsonl"
 )
 
 SYSTEM_PROMPT = """You are a helpful assistant that can solve the given question step by step.
