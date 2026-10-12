@@ -45,7 +45,7 @@ from .utils import (
 )
 
 THRESHOLD = 0.4297
-RETRIEVAL_COST = 0.1
+RETRIEVAL_COST = 0.01
 # THRESHOLD = 0.5
 # RETRIEVAL_COST = 0.05
 MAX_RETRIEVAL_CONTEXT_TOKENS = 600
@@ -66,10 +66,15 @@ def flip_coin(probability: float = 0.1) -> bool:
 def increase_probability(probability: float) -> float:
     return min(probability + 0.05, MAX_EXPLORATION_PROBABILITY)
 
+# def decrease_probability(
+#     probability: float,
+# ) -> float:
+#     return MIN_EXPLORATION_PROBABILITY
+
 def decrease_probability(
     probability: float,
 ) -> float:
-    return MIN_EXPLORATION_PROBABILITY
+    return max(probability / 2, MIN_EXPLORATION_PROBABILITY)
 
 
 # ============================================================
@@ -428,6 +433,7 @@ class AttentionMixingProbeForCausalLM(
         self.doc = []
         self.retrieve_segment_indices = []
         self.first_segment_retrieval_decision_score = None
+        self.retrieval_score = []
 
         # Initialize weights and apply final processing
         self.post_init()
@@ -1232,6 +1238,7 @@ class AttentionMixingProbeForCausalLM(
                 question=question,
                 tokenizer=self._get_tokenizer(),
                 config=self.config,
+                probability=INIT_EXPLORATION_PROBABILITY,
             )
 
             first_token_generation = True
@@ -1240,6 +1247,7 @@ class AttentionMixingProbeForCausalLM(
             self.retrieval_count = 0
             self.query = []
             self.doc = []
+            self.retrieval_score = []
 
         else:
             attention_mask = past_key_values.attention_mask
@@ -1260,6 +1268,8 @@ class AttentionMixingProbeForCausalLM(
         retrieval_decision = (
             past_key_values.retrieval_decision
         )
+
+        # exploration_prob = past_key_values.probability
 
         # =====================================================================
         # 3. Current sequence length
@@ -1336,18 +1346,26 @@ class AttentionMixingProbeForCausalLM(
                 )
             )
 
+            self.retrieval_score.append(new_decision_score.item())
+
             # -----------------------------------------------------------------
             # 6.2 Check retrieval condition
             # -----------------------------------------------------------------
 
             if (
-                ( new_decision_score.item() >= THRESHOLD )
+                (
+                    new_decision_score.item() >= THRESHOLD
+                    # or (not first_token_generation and flip_coin(exploration_prob))
+                    # or past_key_values.counter == 1
+                )
                 and self.retrieval_count < self.max_retrievals
             ):
-
+                # exploration_prob = decrease_probability(exploration_prob)
                 # -------------------------------------------------------------
                 # 6.2.1 Build retrieval query
                 # -------------------------------------------------------------
+                # if past_key_values.counter == 1:
+                #     new_decision_score = torch.full_like(new_decision_score, 0.6)
 
                 retrieval_query = (
                     past_key_values.build_retrieval_query()
@@ -1465,6 +1483,11 @@ class AttentionMixingProbeForCausalLM(
                 # retrieval_decision = (
                 #     new_decision_score
                 # )
+            
+            # else:
+            #     exploration_prob = increase_probability(exploration_prob)
+
+            # past_key_values.probability = exploration_prob
 
         # =====================================================================
         # 7. Logits

@@ -52,6 +52,7 @@ class ARTCache(Cache):
         config=None,
         offloading=False,
         offload_only_non_sliding=False,
+        probability: int = 0.3,
     ):
         # ====================================================
         # CONFIGURATION
@@ -62,6 +63,7 @@ class ARTCache(Cache):
         self.language = language
         self.tokenizer = tokenizer
         self.counter = 0
+        self.probability = probability
 
         # ====================================================
         # WITH DOCUMENT
