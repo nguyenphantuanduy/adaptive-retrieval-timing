@@ -1937,7 +1937,13 @@ class AttentionMixingProbeForCausalLM(
                 ):
             
                     if decision_score is not None:
-                        retrieval_cost += RETRIEVAL_COST * decision_score.sum()    
+                        retrieval_cost += RETRIEVAL_COST * decision_score.sum()  
+
+            retrieval_cost = retrieval_cost.to(
+                device=lm_loss.device,
+                dtype=lm_loss.dtype,
+            )
+
     
             loss = (
                 lm_loss
