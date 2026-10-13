@@ -45,7 +45,7 @@ from .utils import (
 )
 
 THRESHOLD = 0.4297
-RETRIEVAL_COST = 0.01
+RETRIEVAL_COST = 0.05
 # THRESHOLD = 0.5
 # RETRIEVAL_COST = 0.05
 MAX_RETRIEVAL_CONTEXT_TOKENS = 600
@@ -434,6 +434,8 @@ class AttentionMixingProbeForCausalLM(
         self.retrieve_segment_indices = []
         self.first_segment_retrieval_decision_score = None
         self.retrieval_score = []
+        self.model_retrieval_count_for_logging = []
+        self.exploration_retrieval_count_for_logging = []
 
         # Initialize weights and apply final processing
         self.post_init()
@@ -632,6 +634,8 @@ class AttentionMixingProbeForCausalLM(
         probability = INIT_EXPLORATION_PROBABILITY
         self.retrieve_segment_indices = []
         self.first_segment_retrieval_decision_score = None
+        model_retrieval_count = 0
+        exploration_retrieval_count = 0
 
         # =====================================================================
         # 2. Initial sequence length
@@ -701,6 +705,9 @@ class AttentionMixingProbeForCausalLM(
             ( question_decision_score.item() >= THRESHOLD )
             and self.retrieval_count < self.max_retrievals
         ):
+            
+            model_retrieval_count += 1
+
             self.first_segment_retrieval_decision_score = question_decision_score.item()
             self.retrieve_segment_indices.append(past_key_values.counter)
             probability = decrease_probability(probability)
@@ -933,6 +940,11 @@ class AttentionMixingProbeForCausalLM(
                 ( new_decision_score.item() >= THRESHOLD or flip_coin(probability) )
                 and self.retrieval_count < self.max_retrievals
             ):
+                if new_decision_score.item() >= THRESHOLD:
+                    model_retrieval_count += 1
+                else:
+                    exploration_retrieval_count += 1
+
                 if self.first_segment_retrieval_decision_score is None:
                     self.first_segment_retrieval_decision_score = new_decision_score.item()
                 self.retrieve_segment_indices.append(past_key_values.counter)
@@ -1092,6 +1104,7 @@ class AttentionMixingProbeForCausalLM(
         # =====================================================================
 
         if sentence_buffer:
+            past_key_values.counter += 1
 
             sentence_tokens = (
                 torch.stack(sentence_buffer)
@@ -1163,13 +1176,20 @@ class AttentionMixingProbeForCausalLM(
 
             if (
                 ( new_decision_score.item() >= THRESHOLD )
-                and self.retrieval_count < self.max_retrievals
+                # and self.retrieval_count < self.max_retrievals
             ):
+                model_retrieval_count += 1
+                self.retrieval_count += 1
+                if self.first_segment_retrieval_decision_score is None:
+                    self.first_segment_retrieval_decision_score = new_decision_score.item()
+                self.retrieve_segment_indices.append(past_key_values.counter)
                 self._append_trajectory_step(
                     trajectory=trajectory,
                     retrieval_decision=decision_score,
                 )
 
+        self.model_retrieval_count_for_logging.append(model_retrieval_count)
+        self.exploration_retrieval_count_for_logging.append(exploration_retrieval_count)
         self.retrieval_count_for_logging.append(
             self.retrieval_count
         )
@@ -1939,10 +1959,10 @@ class AttentionMixingProbeForCausalLM(
                     if decision_score is not None:
                         retrieval_cost += RETRIEVAL_COST * decision_score.sum()  
 
-            retrieval_cost = retrieval_cost.to(
-                device=lm_loss.device,
-                dtype=lm_loss.dtype,
-            )
+            # retrieval_cost = retrieval_cost.to(
+            #     device=lm_loss.device,
+            #     dtype=lm_loss.dtype,
+            # )
 
     
             loss = (

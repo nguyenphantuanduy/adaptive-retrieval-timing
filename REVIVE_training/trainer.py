@@ -42,6 +42,48 @@ class ARTTrainer(Trainer):
             model = model.module
 
         # ============================================================
+        # MODEL RETRIEVAL COUNT
+        # ============================================================
+    
+        if hasattr(model, "model_retrieval_count_for_logging"):
+            model_retrieval_counts = (
+                model.model_retrieval_count_for_logging
+            )
+    
+            if model_retrieval_counts:
+                average_model_retrieval_count = (
+                    sum(model_retrieval_counts)
+                    / len(model_retrieval_counts)
+                )
+    
+                logs["model_retrieval_count"] = (
+                    average_model_retrieval_count
+                )
+    
+                model_retrieval_counts.clear()
+    
+        # ============================================================
+        # EXPLORATION RETRIEVAL COUNT
+        # ============================================================
+    
+        if hasattr(model, "exploration_retrieval_count_for_logging"):
+            exploration_retrieval_counts = (
+                model.exploration_retrieval_count_for_logging
+            )
+    
+            if exploration_retrieval_counts:
+                average_exploration_retrieval_count = (
+                    sum(exploration_retrieval_counts)
+                    / len(exploration_retrieval_counts)
+                )
+    
+                logs["exploration_retrieval_count"] = (
+                    average_exploration_retrieval_count
+                )
+    
+                exploration_retrieval_counts.clear()
+
+        # ============================================================
         # RETRIEVAL COUNT
         # ============================================================
 
