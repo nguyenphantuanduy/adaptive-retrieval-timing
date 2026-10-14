@@ -1428,6 +1428,10 @@ def main():
 
         logging_first_step=True,
 
+        # TensorBoard
+        report_to="tensorboard",
+        run_name="ART-REVIVE",
+
         # ----------------------------------------------------
         # Saving
         # ----------------------------------------------------
