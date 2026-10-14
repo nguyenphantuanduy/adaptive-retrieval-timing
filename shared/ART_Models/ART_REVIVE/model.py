@@ -1176,7 +1176,7 @@ class AttentionMixingProbeForCausalLM(
 
             if (
                 ( new_decision_score.item() >= THRESHOLD )
-                # and self.retrieval_count < self.max_retrievals
+                and self.retrieval_count < self.max_retrievals
             ):
                 model_retrieval_count += 1
                 self.retrieval_count += 1
