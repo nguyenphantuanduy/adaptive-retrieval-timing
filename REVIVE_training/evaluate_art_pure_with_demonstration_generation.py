@@ -23,7 +23,7 @@ TOKENIZER_REPO = "Qwen/Qwen2.5-3B-Instruct"
 
 DTYPE = torch.bfloat16
 
-MAX_NEW_TOKENS = 512
+MAX_NEW_TOKENS = 1024
 
 DEMONSTRATION_FILE = Path(
     "REVIVE_training/result/"
