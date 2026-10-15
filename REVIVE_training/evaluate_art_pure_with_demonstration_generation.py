@@ -216,7 +216,7 @@ with OUTPUT_FILE.open(
         # ----------------------------------------------------
 
         user_prompt = (
-            f"{demonstration_prompt}\n\n"
+            f"{demonstration_prompt}\n"
             f"{question}"
         )
 
@@ -279,6 +279,7 @@ with OUTPUT_FILE.open(
                 attention_mask=attention_mask,
                 question=question,
                 max_new_tokens=MAX_NEW_TOKENS,
+                do_sample=False,
             )
 
         # ----------------------------------------------------

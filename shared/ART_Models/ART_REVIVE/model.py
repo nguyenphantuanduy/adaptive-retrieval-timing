@@ -76,6 +76,12 @@ def decrease_probability(
 ) -> float:
     return max(probability / 2, MIN_EXPLORATION_PROBABILITY)
 
+FORBIDDEN_TERMS = {
+    "<answer>",
+    "</answer>",
+    "<observation>",
+    "</observation>",
+}
 
 # ============================================================
 # Exponential saturation retrieval cost
@@ -1378,7 +1384,7 @@ class AttentionMixingProbeForCausalLM(
                     # or (not first_token_generation and flip_coin(exploration_prob))
                     # or past_key_values.counter == 1
                 )
-                and self.retrieval_count < self.max_retrievals
+                # and self.retrieval_count < self.max_retrievals
             ):
                 # exploration_prob = decrease_probability(exploration_prob)
                 # -------------------------------------------------------------
@@ -1390,110 +1396,112 @@ class AttentionMixingProbeForCausalLM(
                 retrieval_query = (
                     past_key_values.build_retrieval_query()
                 )
-                self.query.append(retrieval_query)
-                # -------------------------------------------------------------
-                # 6.2.2 Retrieve
-                # -------------------------------------------------------------
 
-                retrieval_text, passages = self._get_retriever().search(
-                    query=retrieval_query,
-                    max_passage_tokens=max_retrieval_context_tokens,
-                    tokenizer=self._get_tokenizer(),
-                    top_k=retrieval_topk,
-                    return_passages=True,
-                )
-                self.doc.extend(passages)
+                if not any(term in retrieval_query for term in FORBIDDEN_TERMS):
+                    self.query.append(retrieval_query)
+                    # -------------------------------------------------------------
+                    # 6.2.2 Retrieve
+                    # -------------------------------------------------------------
 
-                self.retrieval_count += 1
-
-                # -------------------------------------------------------------
-                # 6.2.3 Tokenize retrieved document
-                # -------------------------------------------------------------
-
-                document_inputs = self._get_tokenizer()(
-                    retrieval_text,
-                    return_tensors="pt",
-                )
-
-                document_input_ids = (
-                    document_inputs["input_ids"]
-                    .to(input_ids.device)
-                )
-
-                document_length = (
-                    document_input_ids.shape[1]
-                )
-
-                # -------------------------------------------------------------
-                # 6.2.4 Create document attention mask
-                # -------------------------------------------------------------
-
-                new_document_attention_mask = (
-                    create_document_attention_mask(
-                        current_sequence_len=current_sequence_length,
-                        document_len=document_length,
-                    ).to(input_ids.device)
-                )
-
-                # -------------------------------------------------------------
-                # 6.2.5 Extend normal attention mask
-                # -------------------------------------------------------------
-
-                attention_mask = update_attention_mask(
-                    attention_mask,
-                    num_tokens=document_length,
-                )
-
-                # -------------------------------------------------------------
-                # 6.2.6 Forward retrieved document
-                #
-                # The newly retrieved document becomes available to
-                # subsequent generated tokens.
-                # -------------------------------------------------------------
-
-                document_outputs: BaseModelOutputWithPast = (
-                    self.model(
-                        input_ids=document_input_ids,
-                        attention_mask=attention_mask,
-                        past_key_values=past_key_values,
-                        use_cache=True,
-                        document_attention_mask=(
-                            document_attention_mask
-                        ),
-                        retrieval_decision=retrieval_decision,
+                    retrieval_text, passages = self._get_retriever().search(
+                        query=retrieval_query,
+                        max_passage_tokens=max_retrieval_context_tokens,
+                        tokenizer=self._get_tokenizer(),
+                        top_k=retrieval_topk,
+                        return_passages=True,
                     )
-                )
+                    self.doc.extend(passages)
 
-                past_key_values = (
-                    document_outputs.past_key_values
-                )
+                    self.retrieval_count += 1
 
-                document_hidden_states = (
-                    document_outputs.last_hidden_state
-                )
+                    # -------------------------------------------------------------
+                    # 6.2.3 Tokenize retrieved document
+                    # -------------------------------------------------------------
 
-                hidden_states = torch.cat(
-                    [
-                        hidden_states,
-                        document_hidden_states,
-                    ],
-                    dim=1,
-                )
+                    document_inputs = self._get_tokenizer()(
+                        retrieval_text,
+                        return_tensors="pt",
+                    )
 
-                # -------------------------------------------------------------
-                # 6.2.7 Update sequence length
-                # -------------------------------------------------------------
+                    document_input_ids = (
+                        document_inputs["input_ids"]
+                        .to(input_ids.device)
+                    )
 
-                current_sequence_length += document_length
+                    document_length = (
+                        document_input_ids.shape[1]
+                    )
 
-                # -------------------------------------------------------------
-                # 6.2.8 Store new document context in ART cache
-                # -------------------------------------------------------------
+                    # -------------------------------------------------------------
+                    # 6.2.4 Create document attention mask
+                    # -------------------------------------------------------------
 
-                past_key_values.update_retrieval_state(
-                    document_attention_mask=new_document_attention_mask,
-                    retrieval_decision=new_decision_score,
-                )
+                    new_document_attention_mask = (
+                        create_document_attention_mask(
+                            current_sequence_len=current_sequence_length,
+                            document_len=document_length,
+                        ).to(input_ids.device)
+                    )
+
+                    # -------------------------------------------------------------
+                    # 6.2.5 Extend normal attention mask
+                    # -------------------------------------------------------------
+
+                    attention_mask = update_attention_mask(
+                        attention_mask,
+                        num_tokens=document_length,
+                    )
+
+                    # -------------------------------------------------------------
+                    # 6.2.6 Forward retrieved document
+                    #
+                    # The newly retrieved document becomes available to
+                    # subsequent generated tokens.
+                    # -------------------------------------------------------------
+
+                    document_outputs: BaseModelOutputWithPast = (
+                        self.model(
+                            input_ids=document_input_ids,
+                            attention_mask=attention_mask,
+                            past_key_values=past_key_values,
+                            use_cache=True,
+                            document_attention_mask=(
+                                document_attention_mask
+                            ),
+                            retrieval_decision=retrieval_decision,
+                        )
+                    )
+
+                    past_key_values = (
+                        document_outputs.past_key_values
+                    )
+
+                    document_hidden_states = (
+                        document_outputs.last_hidden_state
+                    )
+
+                    hidden_states = torch.cat(
+                        [
+                            hidden_states,
+                            document_hidden_states,
+                        ],
+                        dim=1,
+                    )
+
+                    # -------------------------------------------------------------
+                    # 6.2.7 Update sequence length
+                    # -------------------------------------------------------------
+
+                    current_sequence_length += document_length
+
+                    # -------------------------------------------------------------
+                    # 6.2.8 Store new document context in ART cache
+                    # -------------------------------------------------------------
+
+                    past_key_values.update_retrieval_state(
+                        document_attention_mask=new_document_attention_mask,
+                        retrieval_decision=new_decision_score,
+                    )
 
                 # # Update local references as well.
                 # document_attention_mask = (

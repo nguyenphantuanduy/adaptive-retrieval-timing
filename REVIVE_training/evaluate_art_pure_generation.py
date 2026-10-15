@@ -183,6 +183,7 @@ with OUTPUT_FILE.open(
                 attention_mask=attention_mask,
                 question=question,
                 max_new_tokens=MAX_NEW_TOKENS,
+                do_sample=False,
             )
 
 
