@@ -217,4 +217,5 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 shared/MusiQue/data/
+shared/HotpotQA_Distractor/data/
 ART_SECRET_TOKEN.md
