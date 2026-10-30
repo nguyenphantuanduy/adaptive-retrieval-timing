@@ -452,19 +452,19 @@ class AttentionMixingProbeForCausalLM(
     def disable_training_mode(self):
         self.isTraining = False
 
-    # def _get_retriever(self):
-    #     if self.retriever is None:
-    #         self.retriever = MuSiQueRetrievalDB(
-    #             top_k=3,
-    #         )
-    #     return self.retriever
-
     def _get_retriever(self):
-            if self.retriever is None:
-                self.retriever = HotpotQARetrievalDB(
-                    top_k=3,
-                )
-            return self.retriever
+        if self.retriever is None:
+            self.retriever = MuSiQueRetrievalDB(
+                top_k=3,
+            )
+        return self.retriever
+
+    # def _get_retriever(self):
+    #         if self.retriever is None:
+    #             self.retriever = HotpotQARetrievalDB(
+    #                 top_k=3,
+    #             )
+    #         return self.retriever
 
     def _get_tokenizer(self):
         if self.tokenizer is None:
