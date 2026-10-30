@@ -1650,77 +1650,155 @@ def test_create_model_input_for_lm_loss():
 #     # test_create_model_input()
 #     test_create_model_input_for_lm_loss()
 
+
+
+
 if __name__ == "__main__":
-    tokenizer = AutoTokenizer.from_pretrained(
-        QWEN_REPO
+    from datasets import load_dataset
+
+    # ========================================================
+    # 1. LOAD TOKENIZER AND DATASET
+    # ========================================================
+
+    tokenizer = AutoTokenizer.from_pretrained(QWEN_REPO)
+
+    DATASET_NAME = (
+        "adaptive-retrieval-timing/"
+        "teacher-generated-hypothesis-validation"
     )
 
+    hop = 3
+    config_name = f"{hop}-hop"
+
+    dataset = load_dataset(DATASET_NAME, config_name)
+    raw_sample = dataset["validation"][0]
+
+    # ========================================================
+    # 2. EXTRACT QUESTION, ANSWER, AND PASSAGES
+    # ========================================================
+
+    question = raw_sample["question"]
+    answer = raw_sample["answer"]
+
+    golden_passages = [
+        p for p in raw_sample["paragraphs"]
+        if p["is_supporting"]
+    ]
+
+    distract_passages = [
+        p for p in raw_sample["paragraphs"]
+        if not p["is_supporting"]
+    ]
+
+    # Print only a short excerpt of each passage.
+    CONTENT_PREVIEW_LENGTH = 300
+
+    def print_passages(title, passages):
+        print(f"\n{'=' * 80}")
+        print(f"{title} ({len(passages)})")
+        print("=" * 80)
+
+        for i, passage in enumerate(passages, start=1):
+            content = " ".join(
+                passage["paragraph_text"].split()
+            )
+            if len(content) > CONTENT_PREVIEW_LENGTH:
+                content = content[:CONTENT_PREVIEW_LENGTH].rstrip() + "..."
+
+            print(f"\n[{i}] {passage['title']}")
+            print(content)
+
+    # ========================================================
+    # 3. PRINT SLIDE-FRIENDLY SAMPLE
+    # ========================================================
+
+    print("=" * 80)
+    print("QUESTION")
+    print("=" * 80)
+    print(question)
+
+    print("\n" + "=" * 80)
+    print("ANSWER")
+    print("=" * 80)
+    print(answer)
+
+    print_passages("GOLDEN PASSAGES", golden_passages)
+    print_passages("DISTRACTOR PASSAGES", distract_passages)
+
+    # ========================================================
+    # 4. SELECT 3 DOCUMENTS FOR LM INPUT
+    #    1 positive + 2 negative
+    # ========================================================
+
+    if not golden_passages:
+        raise ValueError("This sample has no golden passage.")
+
+    if len(distract_passages) < 2:
+        raise ValueError(
+            "This sample has fewer than 2 distractor passages."
+        )
+
+    selected_golden = golden_passages[0]
+    selected_distractors = distract_passages[:2]
+
+    selected_passages = [
+        selected_golden,
+        *selected_distractors,
+    ]
+
     sample = SampleObjectForLMLoss(
-        question=(
-            "Who wrote Common Sense and why was it important?"
-        ),
+        question=question,
         documents=[
             Document(
-                title="Common Sense",
-                content=(
-                    "Common Sense was a pamphlet written "
-                    "by Thomas Paine."
-                ),
-            ),
-            Document(
-                title="Thomas Paine",
-                content=(
-                    "Thomas Paine was an author and key figure "
-                    "in the American Revolution. His work "
-                    "Common Sense crystallized the rebellious "
-                    "demand for independence from Great Britain."
-                ),
-            ),
+                title=p["title"],
+                content=p["paragraph_text"],
+            )
+            for p in selected_passages
         ],
-        answer=(
-            "Thomas Paine wrote Common Sense, and it "
-            "helped build support for American independence."
-        ),
+        answer=answer,
     )
+
+    # ========================================================
+    # 5. PRINT THE EXACT 3 DOCUMENTS FED TO THE MODEL
+    # ========================================================
+
+    print("\n" + "=" * 80)
+    print("SELECTED DOCUMENTS FOR LM INPUT (1 POSITIVE + 2 NEGATIVE)")
+    print("=" * 80)
+
+    for i, passage in enumerate(selected_passages, start=1):
+        label = "POSITIVE" if i == 1 else "NEGATIVE"
+        content = " ".join(passage["paragraph_text"].split())
+
+        if len(content) > CONTENT_PREVIEW_LENGTH:
+            content = content[:CONTENT_PREVIEW_LENGTH].rstrip() + "..."
+
+        print(f"\n[{i}] [{label}] {passage['title']}")
+        print(content)
+
+    # ========================================================
+    # 6. BUILD MODEL INPUT
+    # ========================================================
 
     result = create_model_input_for_lm_loss(
         sample=sample,
         tokenizer=tokenizer,
     )
 
+    print("\n" + "=" * 80)
+    print("FULL MODEL INPUT")
     print("=" * 80)
-    print("FULL TEXT")
-    print("=" * 80)
-    print()
-
     print(result["full_text"])
 
-    print()
-    print("=" * 80)
+    print("\n" + "=" * 80)
     print("TENSOR SHAPES")
     print("=" * 80)
 
-    print(
-        f"input_ids               : "
-        f"{tuple(result['input_ids'].shape)}"
-    )
-
-    print(
-        f"attention_mask          : "
-        f"{tuple(result['attention_mask'].shape)}"
-    )
-
-    print(
-        f"document_attention_mask : "
-        f"{tuple(result['document_attention_mask'].shape)}"
-    )
-
-    print(
-        f"retrieval_decision      : "
-        f"{tuple(result['retrieval_decision'].shape)}"
-    )
-
-    print(
-        f"labels                  : "
-        f"{tuple(result['labels'].shape)}"
-    )
+    for key in (
+        "input_ids",
+        "attention_mask",
+        "document_attention_mask",
+        "retrieval_decision",
+        "labels",
+    ):
+        print(f"{key:26}: {tuple(result[key].shape)}")

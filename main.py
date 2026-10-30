@@ -1,64 +1,45 @@
-import os
-import tempfile
+import json
 from pathlib import Path
-from getpass import getpass
 
 # ============================================================
-# 1. Chuyển cache và thư mục tạm sang ổ D
-# Phải thực hiện trước khi import huggingface_hub
+# Configuration
 # ============================================================
 
-HF_HOME = Path(r"D:\HF_HOME")
-HF_HUB_CACHE = HF_HOME / "hub"
-HF_XET_CACHE = HF_HOME / "xet"
-HF_ASSETS_CACHE = HF_HOME / "assets"
-HF_TEMP = Path(r"D:\HF_TEMP")
+INPUT_FILE = Path("teacher_hypothesis_demonstrations.jsonl")
 
-for folder in (
-    HF_HOME,
-    HF_HUB_CACHE,
-    HF_XET_CACHE,
-    HF_ASSETS_CACHE,
-    HF_TEMP,
-):
-    folder.mkdir(parents=True, exist_ok=True)
-
-os.environ["HF_HOME"] = str(HF_HOME)
-os.environ["HF_HUB_CACHE"] = str(HF_HUB_CACHE)
-os.environ["HF_XET_CACHE"] = str(HF_XET_CACHE)
-os.environ["HF_ASSETS_CACHE"] = str(HF_ASSETS_CACHE)
-
-os.environ["TEMP"] = str(HF_TEMP)
-os.environ["TMP"] = str(HF_TEMP)
-tempfile.tempdir = str(HF_TEMP)
 
 # ============================================================
-# 2. Download đúng một file vào thư mục chứa main.py
+# Main
 # ============================================================
 
-from huggingface_hub import hf_hub_download
+def main():
+    if not INPUT_FILE.exists():
+        print(f"File not found: {INPUT_FILE.resolve()}")
+        return
 
-REPO_ID = "adaptive-retrieval-timing/ART-REVIVE"
-FILENAME = "model.safetensors"
+    with INPUT_FILE.open("r", encoding="utf-8") as f:
+        for idx, line in enumerate(f, start=1):
+            line = line.strip()
 
-SAVE_DIR = Path(__file__).resolve().parent
-DESTINATION = SAVE_DIR / FILENAME
+            if not line:
+                continue
 
-HF_TOKEN = getpass("Nhap Hugging Face access token: ")
+            try:
+                sample = json.loads(line)
+            except json.JSONDecodeError as e:
+                print(f"[Error] Invalid JSON at line {idx}: {e}")
+                continue
 
-print(f"Destination: {DESTINATION}")
-print(f"HF cache:    {HF_HUB_CACHE}")
-print(f"Xet cache:   {HF_XET_CACHE}")
-print(f"Temp:        {HF_TEMP}")
+            print("=" * 100)
+            print(f"Sample: {idx}")
+            print(f"Hop: {sample.get('hop', 'N/A')}")
+            print(f"Question: {sample.get('question', 'N/A')}")
+            print("-" * 100)
+            print("Teacher Generation Output:")
+            print(sample.get("teacher_generation_output", "N/A"))
+            print("=" * 100)
+            print()
 
-path = hf_hub_download(
-    repo_id=REPO_ID,
-    filename=FILENAME,
-    revision="main",
-    token=HF_TOKEN,
-    local_dir=str(SAVE_DIR),
-)
 
-print(f"\nDownload completed: {path}")
-print(f"File exists: {Path(path).is_file()}")
-print(f"File size: {Path(path).stat().st_size / (1024**3):.3f} GB")
+if __name__ == "__main__":
+    main()

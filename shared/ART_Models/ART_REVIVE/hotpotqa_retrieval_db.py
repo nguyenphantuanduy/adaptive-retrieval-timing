@@ -64,33 +64,17 @@ def append_retrieval_observation(observation: str) -> str:
     )
 
 
+
 class HotpotQARetrievalDB:
     """
-    Retrieval database for HotpotQA using E5-base-v2 and FAISS.
+    Local HotpotQA retrieval database using E5-base-v2 and FAISS.
 
-    Downloads:
+    Loads:
         - e5_Flat.index
         - hotpotqa_corpus.jsonl
 
-    Query embedding:
-        "query: <query>"
-
-    Expected corpus fields:
-        - id
-        - title
-        - content
-
-    The implementation also supports "document" as a fallback
-    for the passage text field.
-
-    Example:
-        db = HotpotQARetrievalDB(top_k=3)
-
-        observation = db.search(
-            "Which university did the director of Film X attend?"
-        )
-
-        print(observation)
+    directly from local_dir without downloading the index or corpus
+    from Hugging Face.
     """
 
     DEFAULT_REPO_ID = (
@@ -98,9 +82,14 @@ class HotpotQARetrievalDB:
     )
     DEFAULT_REPO_TYPE = "dataset"
     DEFAULT_MODEL_NAME = "intfloat/e5-base-v2"
+    DEFAULT_LOCAL_DIR = (
+        "shared/HotpotQA_Distractor/"
+        "HotpotQA-ART-E5-Retrieval-Index"
+    )
 
     def __init__(
         self,
+        local_dir: str = DEFAULT_LOCAL_DIR,
         repo_id: str = DEFAULT_REPO_ID,
         repo_type: str = DEFAULT_REPO_TYPE,
         model_name: str = DEFAULT_MODEL_NAME,
@@ -108,12 +97,15 @@ class HotpotQARetrievalDB:
         max_length: int = 512,
         device: Optional[str] = None,
     ):
+        import os
+
         if top_k <= 0:
             raise ValueError("top_k must be > 0")
 
         if max_length <= 0:
             raise ValueError("max_length must be > 0")
 
+        self.local_dir = os.path.abspath(local_dir)
         self.repo_id = repo_id
         self.repo_type = repo_type
         self.model_name = model_name
@@ -124,7 +116,7 @@ class HotpotQARetrievalDB:
             "cuda" if torch.cuda.is_available() else "cpu"
         )
 
-        # Load FAISS index and corpus.
+        # Load the local FAISS index and corpus.
         self.index = self._load_index()
         self.corpus = self._load_corpus()
 
@@ -137,6 +129,7 @@ class HotpotQARetrievalDB:
             )
 
         # Load E5 model and tokenizer.
+        # These may still download from Hugging Face if not cached.
         self.tokenizer = AutoTokenizer.from_pretrained(
             self.model_name,
             use_fast=True,
@@ -149,24 +142,39 @@ class HotpotQARetrievalDB:
         self.model.to(self.device)
 
     # --------------------------------------------------------------
-    # Loading
+    # Loading local files
     # --------------------------------------------------------------
 
     def _load_index(self):
-        index_path = hf_hub_download(
-            repo_id=self.repo_id,
-            filename="e5_Flat.index",
-            repo_type=self.repo_type,
+        import os
+
+        index_path = os.path.join(
+            self.local_dir,
+            "e5_Flat.index",
         )
 
+        if not os.path.isfile(index_path):
+            raise FileNotFoundError(
+                f"FAISS index not found: {index_path}"
+            )
+
+        print(f"Loading local FAISS index: {index_path}")
         return faiss.read_index(index_path)
 
     def _load_corpus(self) -> List[Dict]:
-        corpus_path = hf_hub_download(
-            repo_id=self.repo_id,
-            filename="hotpotqa_corpus.jsonl",
-            repo_type=self.repo_type,
+        import os
+
+        corpus_path = os.path.join(
+            self.local_dir,
+            "hotpotqa_corpus.jsonl",
         )
+
+        if not os.path.isfile(corpus_path):
+            raise FileNotFoundError(
+                f"HotpotQA corpus not found: {corpus_path}"
+            )
+
+        print(f"Loading local corpus: {corpus_path}")
 
         corpus = []
 
@@ -181,8 +189,7 @@ class HotpotQARetrievalDB:
                     doc = json.loads(line)
                 except json.JSONDecodeError as exc:
                     raise ValueError(
-                        "Invalid JSONL at line "
-                        f"{line_number}: {exc}"
+                        f"Invalid JSONL at line {line_number}: {exc}"
                     ) from exc
 
                 if not isinstance(doc, dict):
@@ -200,9 +207,6 @@ class HotpotQARetrievalDB:
 
     @staticmethod
     def _get_passage_text(doc: Dict) -> str:
-        """
-        Support either 'content' or 'document' as the passage field.
-        """
         if "content" in doc:
             return str(doc["content"])
 
@@ -245,7 +249,6 @@ class HotpotQARetrievalDB:
 
     @torch.no_grad()
     def _encode_query(self, query: str):
-        # Keep the E5 query prefix.
         text = f"query: {query}"
 
         inputs = self.tokenizer(
@@ -300,7 +303,6 @@ class HotpotQARetrievalDB:
             return []
 
         k = min(k, self.index.ntotal)
-
         query_embedding = self._encode_query(query)
 
         scores, indices = self.index.search(
@@ -342,35 +344,13 @@ class HotpotQARetrievalDB:
         tokenizer=None,
         return_passages: bool = False,
     ) -> Union[str, Tuple[str, List[str]]]:
-        """
-        Retrieve passages and return one observation string.
-
-        Args:
-            query:
-                Retrieval query, e.g. an ART reasoning sentence.
-            top_k:
-                Number of passages to retrieve. Defaults to self.top_k.
-            max_passage_tokens:
-                Maximum token count for the concatenated passage text.
-                -1 means no truncation.
-            tokenizer:
-                Tokenizer for truncation, required if max_passage_tokens
-                is not -1.
-            return_passages:
-                If True, return (observation, passage_parts).
-
-        Returns:
-            Observation string, or (observation, passage_parts).
-        """
         results = self._retrieve(
             query=query,
             top_k=top_k,
         )
 
         passage_parts = [
-            self._format_passage(
-                self.corpus[result["index"]]
-            )
+            self._format_passage(self.corpus[result["index"]])
             for result in results
         ]
 
@@ -394,13 +374,7 @@ class HotpotQARetrievalDB:
         query: str,
         top_k: Optional[int] = None,
     ) -> List[Dict]:
-        """
-        Return retrieved passage metadata, similarity scores and ranks.
-        """
-        return self._retrieve(
-            query=query,
-            top_k=top_k,
-        )
+        return self._retrieve(query=query, top_k=top_k)
 
     def __len__(self) -> int:
         return self.index.ntotal
