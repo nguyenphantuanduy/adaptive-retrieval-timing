@@ -61,7 +61,7 @@ REPETITION_PENALTY = 1.0
 # Which sample to test
 # ------------------------------------------------------------
 
-SAMPLE_INDEX = 0
+SAMPLE_INDEX = 50
 
 CURRENT_FILE_DIR = Path(__file__).resolve().parent
 LOCAL_DEMONSTRATION_FILE = (
