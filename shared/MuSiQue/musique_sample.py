@@ -295,15 +295,15 @@ class MuSiQueSampleConverter:
             )
 
             lines.append(
-                f"Question: {step.question}"
+                f"- Question: {step.question}"
             )
 
             lines.append(
-                f"Answer: {step.answer}"
+                f"- Answer: {step.answer}"
             )
 
             lines.append(
-                f"Supporting document: {document_title}"
+                f"- Supporting document: {document_title}"
             )
 
             if step != decomposition[-1]:
