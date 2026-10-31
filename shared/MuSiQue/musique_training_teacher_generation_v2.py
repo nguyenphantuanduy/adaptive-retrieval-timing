@@ -5,7 +5,7 @@
 #
 # FULL TRAINING SET
 # HOP-BASED BATCH GENERATION
-# ADAPTIVE OOM RECOVERY (BINARY HALVING DOWN TO BATCH SIZE 1)
+# OOM RECOVERY (FALLBACK TO BATCH SIZE 1)
 # SAMPLE-LEVEL OOM FALLBACK (NULL)
 # JSONL OUTPUT
 # HUGGING FACE DATASET UPLOAD
@@ -124,15 +124,15 @@ HF_SPLIT = "train"
 # Batch size is hop-dependent.
 #
 # These batch sizes are used only for generation efficiency.
-# Adaptive halving on OOM will reduce batch size as needed.
+# Fallback to batch size = 1 on OOM.
 #
 # ALL training samples are generated.
 # ------------------------------------------------------------
 
 BATCH_SIZE_BY_HOP = {
-    2: 2,
-    3: 2,
-    4: 2,
+    2: 4,
+    3: 4,
+    4: 4,
 }
 
 
@@ -665,45 +665,34 @@ def generate_one_batch(
 
 
 # ============================================================
-# ADAPTIVE BATCH GENERATION WITH BINARY HALVING ON OOM
+# GENERATE ONE SAMPLE
 # ============================================================
 
-def generate_batch_adaptive(
-    batch_samples,
+def generate_one_sample(
+    sample,
     model,
     tokenizer,
-    demonstrations,
+    demonstrations=None,
     max_new_tokens=MAX_NEW_TOKENS,
     temperature=TEMPERATURE,
     top_p=TOP_P,
     top_k=TOP_K,
     min_p=MIN_P,
     repetition_penalty=REPETITION_PENALTY,
-    depth: int = 0,
 ):
     """
-    Generate teacher outputs with adaptive binary batch halving on OOM:
+    Generate teacher output for exactly one sample.
 
-        Batch size N (OOM)
-            ↓ Clean CUDA
-        Divide batch in half: [N//2, N - N//2]
-            ↓ Recurse
-        ...
-        Until batch size = 1
-            ↓
-        If batch size = 1 still causes CUDA OOM:
-            Clean CUDA
-            Fill output as None (null in JSON)
+    Used when a normal batch causes OOM.
+
+    If the individual sample also causes OOM:
+
+        teacher_generation_output = None
     """
 
-    current_size = len(batch_samples)
-    indent = "    " + "  " * depth
-
     try:
-        start_time = time.perf_counter()
-
-        outputs = generate_one_batch(
-            batch_samples=batch_samples,
+        generated_samples = generate_one_batch(
+            batch_samples=[sample],
             model=model,
             tokenizer=tokenizer,
             demonstrations=demonstrations,
@@ -715,79 +704,31 @@ def generate_batch_adaptive(
             repetition_penalty=repetition_penalty,
         )
 
-        elapsed = time.perf_counter() - start_time
-
-        if depth > 0:
-            print(
-                f"{indent}✓ Sub-batch success "
-                f"(size={current_size}) | {elapsed:.2f}s"
-            )
-
-        return outputs
+        return generated_samples[0]
 
     except Exception as error:
         if not is_cuda_oom_error(error):
             raise
 
+        # ====================================================
+        # SAMPLE-LEVEL OOM
+        # ====================================================
+
         print()
-        print(f"{indent}✗ CUDA OOM encountered at batch size = {current_size}")
-        print(f"{indent}  → Cleaning CUDA memory")
+        print("    ✗ SAMPLE OOM (batch size = 1)")
+        print("      → Cleaning CUDA memory")
+
         clean_cuda_memory()
 
-        # ====================================================
-        # BASE CASE: BATCH SIZE = 1 STILL OOM
-        # ====================================================
+        # ----------------------------------------------------
+        # Keep original sample.
+        # None is valid JSON and will be stored as null.
+        # ----------------------------------------------------
 
-        if current_size == 1:
-            print(f"{indent}  ✗ Batch size = 1 still caused CUDA OOM!")
-            print(f"{indent}  → Fallback: setting teacher_generation_output = null")
+        output_sample = dict(sample)
+        output_sample["teacher_generation_output"] = None
 
-            output_sample = dict(batch_samples[0])
-            output_sample["teacher_generation_output"] = None
-            return [output_sample]
-
-        # ====================================================
-        # RECURSIVE STEP: HALVE BATCH SIZE
-        # ====================================================
-
-        mid = current_size // 2
-        left_samples = batch_samples[:mid]
-        right_samples = batch_samples[mid:]
-
-        print(
-            f"{indent}  → Halving batch: {current_size} -> "
-            f"[{len(left_samples)}, {len(right_samples)}]"
-        )
-
-        left_outputs = generate_batch_adaptive(
-            batch_samples=left_samples,
-            model=model,
-            tokenizer=tokenizer,
-            demonstrations=demonstrations,
-            max_new_tokens=max_new_tokens,
-            temperature=temperature,
-            top_p=top_p,
-            top_k=top_k,
-            min_p=min_p,
-            repetition_penalty=repetition_penalty,
-            depth=depth + 1,
-        )
-
-        right_outputs = generate_batch_adaptive(
-            batch_samples=right_samples,
-            model=model,
-            tokenizer=tokenizer,
-            demonstrations=demonstrations,
-            max_new_tokens=max_new_tokens,
-            temperature=temperature,
-            top_p=top_p,
-            top_k=top_k,
-            min_p=min_p,
-            repetition_penalty=repetition_penalty,
-            depth=depth + 1,
-        )
-
-        return left_outputs + right_outputs
+        return output_sample
 
 
 # ============================================================
@@ -812,11 +753,17 @@ def generate_hop(
     Generate teacher outputs for ALL samples of one hop.
 
     Normal path:
-        Configured initial batch size.
+        configured batch size
 
     OOM path:
-        Binary halving of the batch size down to batch size = 1.
-        If single sample still OOMs -> teacher_generation_output = None.
+        failed batch
+            ↓
+        clean CUDA
+            ↓
+        retry each sample individually with batch size = 1
+
+    Sample-level OOM:
+        teacher_generation_output = None
     """
 
     if len(samples) == 0:
@@ -828,7 +775,7 @@ def generate_hop(
     print("=" * 80)
 
     print(f"Total samples : {len(samples):,}")
-    print(f"Initial batch : {batch_size}")
+    print(f"Batch size    : {batch_size}")
 
     generated_samples = []
     total_samples = len(samples)
@@ -858,49 +805,100 @@ def generate_hop(
             f"[{batch_start + 1:>5}-"
             f"{batch_end:<5}/"
             f"{total_samples}] "
-            f"batch={batch_index} | initial_size={current_batch_size}"
+            f"batch={batch_index} | size={current_batch_size}"
         )
 
         batch_start_time = time.perf_counter()
 
-        # Generate with adaptive binary halving on OOM
-        batch_outputs = generate_batch_adaptive(
-            batch_samples=batch_samples,
-            model=model,
-            tokenizer=tokenizer,
-            demonstrations=demonstrations,
-            max_new_tokens=max_new_tokens,
-            temperature=temperature,
-            top_p=top_p,
-            top_k=top_k,
-            min_p=min_p,
-            repetition_penalty=repetition_penalty,
-            depth=0,
-        )
+        # ====================================================
+        # NORMAL BATCH GENERATION
+        # ====================================================
 
-        batch_generation_time = (
-            time.perf_counter() - batch_start_time
-        )
-        total_generation_time += batch_generation_time
+        try:
+            batch_outputs = generate_one_batch(
+                batch_samples=batch_samples,
+                model=model,
+                tokenizer=tokenizer,
+                demonstrations=demonstrations,
+                max_new_tokens=max_new_tokens,
+                temperature=temperature,
+                top_p=top_p,
+                top_k=top_k,
+                min_p=min_p,
+                repetition_penalty=repetition_penalty,
+            )
 
-        generated_samples.extend(batch_outputs)
+            batch_generation_time = (
+                time.perf_counter() - batch_start_time
+            )
+            total_generation_time += batch_generation_time
 
-        batch_failed = sum(
-            sample.get("teacher_generation_output") is None
-            for sample in batch_outputs
-        )
-        batch_successful = len(batch_outputs) - batch_failed
+            generated_samples.extend(batch_outputs)
 
-        print(
-            f"  ✓ Batch completed: {batch_successful}/{len(batch_outputs)} success "
-            f"| {batch_generation_time:.2f}s"
-        )
+            print(
+                f"  ✓ Batch success | {batch_generation_time:.2f}s"
+            )
 
-        del batch_outputs
-        gc.collect()
+            del batch_outputs
+            gc.collect()
 
-        if torch.cuda.is_available():
-            torch.cuda.empty_cache()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
+        # ====================================================
+        # BATCH OOM -> FALLBACK TO BATCH SIZE = 1
+        # ====================================================
+
+        except Exception as error:
+            if not is_cuda_oom_error(error):
+                raise
+
+            print()
+            print("  ✗ BATCH OOM")
+            print(f"    Failed batch size: {current_batch_size}")
+            print("    → Cleaning CUDA memory")
+            clean_cuda_memory()
+
+            print("    → Retrying each sample with batch size = 1")
+
+            for local_index, sample in enumerate(batch_samples):
+                global_index = batch_start + local_index + 1
+                print(
+                    f"      [{global_index:>5}/{total_samples}] single sample"
+                )
+
+                sample_start_time = time.perf_counter()
+
+                output_sample = generate_one_sample(
+                    sample=sample,
+                    model=model,
+                    tokenizer=tokenizer,
+                    demonstrations=demonstrations,
+                    max_new_tokens=max_new_tokens,
+                    temperature=temperature,
+                    top_p=top_p,
+                    top_k=top_k,
+                    min_p=min_p,
+                    repetition_penalty=repetition_penalty,
+                )
+
+                sample_generation_time = (
+                    time.perf_counter() - sample_start_time
+                )
+                total_generation_time += sample_generation_time
+
+                generated_samples.append(output_sample)
+
+                if output_sample.get("teacher_generation_output") is None:
+                    print("        → Failed / null")
+                else:
+                    print(
+                        f"        ✓ success | {sample_generation_time:.2f}s"
+                    )
+
+                gc.collect()
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
 
     # ========================================================
     # VALIDATION
@@ -1291,7 +1289,7 @@ def run_training_teacher_generation(
     print("MUSIQUE TRAINING TEACHER GENERATION (v2)")
     print(f"MODEL : {MODEL_NAME}")
     print(f"REPO  : {repo_id}")
-    print("FULL DATASET + ADAPTIVE OOM RECOVERY + HF UPLOAD")
+    print("FULL DATASET + OOM RECOVERY + HF UPLOAD")
     print("=" * 80)
 
     print()
