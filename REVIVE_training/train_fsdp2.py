@@ -82,7 +82,7 @@ UNFREEZE_LAST_LAYER_PERCENTAGE = 0.40
 
 PER_DEVICE_TRAIN_BATCH_SIZE = 1
 
-GRADIENT_ACCUMULATION_STEPS = 32
+GRADIENT_ACCUMULATION_STEPS = 1
 
 
 # ------------------------------------------------------------
