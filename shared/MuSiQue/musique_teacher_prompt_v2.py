@@ -957,7 +957,7 @@ if __name__ == "__main__":
 
     dataset = load_musique_ans()
 
-    target_question = "Where is the lowest place in the country which, along with Eisenhower's VP's country, recognized Gaddafi's government early on?"
+    target_question = "What followed the last person to live in versaille in the country that became allies with america after the battle of saratoga?"
 
     # ========================================================
 

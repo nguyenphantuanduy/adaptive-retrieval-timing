@@ -131,8 +131,8 @@ HF_SPLIT = "train"
 
 BATCH_SIZE_BY_HOP = {
     2: 4,
-    3: 4,
-    4: 4,
+    3: 2,
+    4: 2,
 }
 
 
