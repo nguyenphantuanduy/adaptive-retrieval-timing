@@ -1,29 +1,83 @@
+
 from __future__ import annotations
 
-from transformers import Trainer
 from typing import Any, Optional, Union
 
 import torch
 from torch import nn
+from transformers import Trainer
+
+from torch.distributed.fsdp import (
+    FSDPModule,
+    register_fsdp_forward_method,
+)
+
 
 class ARTTrainer(Trainer):
     """
-    Hugging Face Trainer with automatic logging of ART retrieval statistics.
+    Hugging Face Trainer with automatic logging of ART retrieval statistics
+    and support for custom forward_collect() under FSDP2.
 
     The model is expected to expose:
 
+        model.model_retrieval_count_for_logging: list[int]
+        model.exploration_retrieval_count_for_logging: list[int]
         model.retrieval_count_for_logging: list[int]
         model.retrieve_segment_indices: list[int]
         model.first_segment_retrieval_decision_score: float | None
 
-    At each Trainer logging step:
-
-        - Average retrieval count is logged as `retrieval_count`.
-        - Retrieved segment indices are logged as
-          `retrieve_segment_indices`.
-        - First segment retrieval decision score is logged as
-          `first_segment_retrieval_decision_score` if not None.
+    FSDP2:
+        Registers forward_collect() as an FSDP forward method so that
+        FSDP2 executes its pre-forward and post-forward hooks correctly.
     """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+        # Track which model instance has had forward_collect registered.
+        self._art_fsdp_registered_model_id = None
+
+    # ================================================================
+    # FSDP2 CUSTOM FORWARD REGISTRATION
+    # ================================================================
+
+    def _register_fsdp_forward_collect(
+        self,
+        model: nn.Module,
+    ) -> None:
+        """
+        Register forward_collect() with FSDP2.
+
+        FSDP2 automatically handles nn.Module.forward(), but custom
+        methods such as forward_collect() must be registered explicitly.
+
+        This operation is a no-op for non-FSDP2 models.
+        """
+
+        if not isinstance(model, FSDPModule):
+            return
+
+        model_id = id(model)
+
+        if self._art_fsdp_registered_model_id == model_id:
+            return
+
+        register_fsdp_forward_method(
+            model,
+            "forward_collect",
+        )
+
+        self._art_fsdp_registered_model_id = model_id
+
+        if self.is_world_process_zero():
+            print(
+                "[ARTTrainer] Registered forward_collect() "
+                "as an FSDP2 forward method."
+            )
+
+    # ================================================================
+    # LOGGING
+    # ================================================================
 
     def log(
         self,
@@ -31,56 +85,60 @@ class ARTTrainer(Trainer):
         start_time: float | None = None,
     ) -> None:
         """
-        Compute and log ART retrieval statistics since the
-        previous logging step, then reset the logging values.
+        Compute and log ART retrieval statistics since the previous
+        logging step, then reset the logging values.
         """
 
         model = self.model
 
-        # Unwrap if needed (Accelerate / DDP / DeepSpeed / FSDP ...)
+        # Unwrap if needed (DDP / FSDP1 / other wrappers).
         if hasattr(model, "module"):
             model = model.module
 
         # ============================================================
         # MODEL RETRIEVAL COUNT
         # ============================================================
-    
+
         if hasattr(model, "model_retrieval_count_for_logging"):
+
             model_retrieval_counts = (
                 model.model_retrieval_count_for_logging
             )
-    
+
             if model_retrieval_counts:
+
                 average_model_retrieval_count = (
                     sum(model_retrieval_counts)
                     / len(model_retrieval_counts)
                 )
-    
+
                 logs["model_retrieval_count"] = (
                     average_model_retrieval_count
                 )
-    
+
                 model_retrieval_counts.clear()
-    
+
         # ============================================================
         # EXPLORATION RETRIEVAL COUNT
         # ============================================================
-    
+
         if hasattr(model, "exploration_retrieval_count_for_logging"):
+
             exploration_retrieval_counts = (
                 model.exploration_retrieval_count_for_logging
             )
-    
+
             if exploration_retrieval_counts:
+
                 average_exploration_retrieval_count = (
                     sum(exploration_retrieval_counts)
                     / len(exploration_retrieval_counts)
                 )
-    
+
                 logs["exploration_retrieval_count"] = (
                     average_exploration_retrieval_count
                 )
-    
+
                 exploration_retrieval_counts.clear()
 
         # ============================================================
@@ -88,11 +146,14 @@ class ARTTrainer(Trainer):
         # ============================================================
 
         if hasattr(model, "retrieval_count_for_logging"):
+
             retrieval_counts = model.retrieval_count_for_logging
 
             if retrieval_counts:
+
                 average_retrieval_count = (
-                    sum(retrieval_counts) / len(retrieval_counts)
+                    sum(retrieval_counts)
+                    / len(retrieval_counts)
                 )
 
                 logs["retrieval_count"] = average_retrieval_count
@@ -104,9 +165,13 @@ class ARTTrainer(Trainer):
         # ============================================================
 
         if hasattr(model, "retrieve_segment_indices"):
-            retrieve_segment_indices = model.retrieve_segment_indices
+
+            retrieve_segment_indices = (
+                model.retrieve_segment_indices
+            )
 
             if retrieve_segment_indices:
+
                 logs["retrieve_segment_indices"] = list(
                     retrieve_segment_indices
                 )
@@ -118,11 +183,13 @@ class ARTTrainer(Trainer):
         # ============================================================
 
         if hasattr(model, "first_segment_retrieval_decision_score"):
+
             first_segment_score = (
                 model.first_segment_retrieval_decision_score
             )
 
             if first_segment_score is not None:
+
                 logs["first_segment_retrieval_decision_score"] = (
                     first_segment_score
                 )
@@ -130,7 +197,7 @@ class ARTTrainer(Trainer):
                 model.first_segment_retrieval_decision_score = None
 
         # ============================================================
-        # CALL PARENT TRAINER LOG
+        # PARENT TRAINER LOG
         # ============================================================
 
         super().log(
@@ -138,30 +205,65 @@ class ARTTrainer(Trainer):
             start_time=start_time,
         )
 
+    # ================================================================
+    # TRAINING STEP
+    # ================================================================
+
     def training_step(
-            self,
-            model: nn.Module,
-            inputs: dict[str, Union[torch.Tensor, Any]],
-            num_items_in_batch: Optional[torch.Tensor] = None,
-        ) -> torch.Tensor:
-            # ============================================================
-            # 1. Collect trajectory
-            # ============================================================
+        self,
+        model: nn.Module,
+        inputs: dict[str, Union[torch.Tensor, Any]],
+        num_items_in_batch: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
+
+        # ============================================================
+        # 0. REGISTER CUSTOM FORWARD METHOD FOR FSDP2
+        # ============================================================
+
+        self._register_fsdp_forward_collect(model)
+
+        # ============================================================
+        # 1. COLLECT TRAJECTORY
+        # ============================================================
+
+        # Preserve the original gradient-checkpointing state.
+        was_gradient_checkpointing_enabled = getattr(
+            model,
+            "is_gradient_checkpointing",
+            False,
+        )
+
+        if was_gradient_checkpointing_enabled:
             model.gradient_checkpointing_disable()
-            
+
+        try:
+
             with torch.no_grad():
+
                 collect_outputs = model.forward_collect(
                     **inputs,
                 )
-    
-            model.gradient_checkpointing_enable()
-    
-            training_inputs = {
-                "collect_outputs": collect_outputs,
-            }
-    
-            return super().training_step(
-                model,
-                training_inputs,
-                num_items_in_batch,
-            )
+
+        finally:
+
+            # Restore gradient checkpointing even if collection fails.
+            if was_gradient_checkpointing_enabled:
+                model.gradient_checkpointing_enable()
+
+        # ============================================================
+        # 2. PREPARE TRAINING INPUTS
+        # ============================================================
+
+        training_inputs = {
+            "collect_outputs": collect_outputs,
+        }
+
+        # ============================================================
+        # 3. NORMAL TRAINING STEP
+        # ============================================================
+
+        return super().training_step(
+            model,
+            training_inputs,
+            num_items_in_batch,
+        )
