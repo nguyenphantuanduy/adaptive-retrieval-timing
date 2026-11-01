@@ -6,9 +6,11 @@ import gc
 import math
 import random
 
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Iterator
 
 import torch
+
+from torch.utils.data import Sampler
 
 from datasets import (
     load_dataset,
@@ -60,6 +62,13 @@ FSDP_RESHARD_AFTER_FORWARD = True
 FSDP_CPU_OFFLOAD = False
 
 FSDP_STATE_DICT_TYPE = "FULL_STATE_DICT"
+
+
+# ------------------------------------------------------------
+# Same-sample distributed training
+# ------------------------------------------------------------
+
+SAME_SAMPLE_TRAINING = True
 
 
 # ------------------------------------------------------------
@@ -202,6 +211,7 @@ def initialize_distributed_environment():
     rank_print("=" * 80)
 
     rank_print(f"World size: {world_size}")
+    rank_print(f"Rank: {get_rank()}")
     rank_print(f"Local rank: {local_rank}")
     rank_print(f"Device: {device}")
 
@@ -224,6 +234,165 @@ def set_seed(seed: int) -> None:
 
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
+
+
+# ============================================================
+# SAME-SAMPLE SAMPLER
+# ============================================================
+
+class SameSampleSampler(Sampler[int]):
+    """
+    Generate each dataset index NUM_GPUS times consecutively.
+
+    Example with world_size=2:
+
+        Original:
+            [0, 1, 2, 3]
+
+        Generated:
+            [0, 0, 1, 1, 2, 2, 3, 3]
+
+    Accelerate's BatchSamplerShard distributes consecutive
+    batches to different ranks.
+
+        Rank 0:
+            [0, 1, 2, 3]
+
+        Rank 1:
+            [0, 1, 2, 3]
+
+    Both ranks therefore receive the same sample at each step.
+    """
+
+    def __init__(
+        self,
+        dataset,
+        num_replicas: int,
+        seed: int = 42,
+    ):
+
+        self.dataset = dataset
+
+        self.num_replicas = num_replicas
+
+        self.seed = seed
+
+        self.epoch = 0
+
+        if self.num_replicas < 1:
+            raise ValueError(
+                "num_replicas must be >= 1."
+            )
+
+    def __iter__(self) -> Iterator[int]:
+
+        generator = torch.Generator()
+
+        generator.manual_seed(
+            self.seed + self.epoch
+        )
+
+        # Deterministic shuffle shared by all ranks.
+        indices = torch.randperm(
+            len(self.dataset),
+            generator=generator,
+        ).tolist()
+
+        # Repeat each index consecutively.
+        for index in indices:
+
+            for _ in range(self.num_replicas):
+
+                yield index
+
+    def __len__(self) -> int:
+
+        return (
+            len(self.dataset)
+            * self.num_replicas
+        )
+
+    def set_epoch(self, epoch: int) -> None:
+
+        self.epoch = epoch
+
+
+# ============================================================
+# CUSTOM ART TRAINER
+# ============================================================
+
+class SameSampleARTTrainer(ARTTrainer):
+    """
+    ARTTrainer with a sampler that duplicates each sample
+    across all distributed ranks.
+
+    This relies on the standard Hugging Face Trainer
+    get_train_dataloader() implementation, which passes
+    _get_train_sampler() to Accelerate.
+    """
+
+    def _get_train_sampler(self, train_dataset=None):
+
+        if train_dataset is None:
+            train_dataset = self.train_dataset
+
+        if train_dataset is None:
+            return None
+
+        world_size = self.accelerator.num_processes
+
+        if not SAME_SAMPLE_TRAINING:
+
+            return super()._get_train_sampler(
+                train_dataset
+            )
+
+        sampler_seed = (
+            self.args.data_seed
+            if self.args.data_seed is not None
+            else self.args.seed
+        )
+
+        sampler = SameSampleSampler(
+            dataset=train_dataset,
+
+            num_replicas=world_size,
+
+            seed=sampler_seed,
+        )
+
+        if is_main_process():
+
+            print()
+            print("=" * 80)
+            print("SAME-SAMPLE SAMPLER")
+            print("=" * 80)
+
+            print(
+                f"World size: {world_size}"
+            )
+
+            print(
+                f"Dataset size: {len(train_dataset):,}"
+            )
+
+            print(
+                f"Sampler length: {len(sampler):,}"
+            )
+
+            print(
+                "Each sample is repeated "
+                f"{world_size} times."
+            )
+
+            print(
+                "Accelerate distributes identical "
+                "sample indices to all ranks."
+            )
+
+            print("=" * 80)
+
+        return sampler
 
 
 # ============================================================
@@ -777,7 +946,7 @@ def main():
 
     rank_print()
     rank_print("=" * 80)
-    rank_print("ART FSDP2 TRAINING")
+    rank_print("ART FSDP2 SAME-SAMPLE TRAINING")
     rank_print("=" * 80)
 
     # ========================================================
@@ -1013,9 +1182,25 @@ def main():
     # 15. TRAINING ARGUMENTS
     # ========================================================
 
-    effective_batch_size = (
+    # IMPORTANT:
+    #
+    # Both ranks process the same unique sample.
+    #
+    # Therefore:
+    #
+    # Unique effective batch:
+    #     per_device_batch * gradient_accumulation
+    #
+    # Physical copies processed across GPUs:
+    #     unique effective batch * world_size
+
+    unique_effective_batch_size = (
         PER_DEVICE_TRAIN_BATCH_SIZE
         * GRADIENT_ACCUMULATION_STEPS
+    )
+
+    physical_copies_per_step = (
+        unique_effective_batch_size
         * NUM_GPUS
     )
 
@@ -1047,47 +1232,88 @@ def main():
             GRADIENT_CHECKPOINTING
         ),
 
+        # ------------------------------------
         # FSDP2
+        # ------------------------------------
+
         fsdp="full_shard",
 
         fsdp_config=fsdp_config,
 
+        # ------------------------------------
         # ART custom inputs
+        # ------------------------------------
+
         remove_unused_columns=False,
 
+        # ------------------------------------
         # Logging
+        # ------------------------------------
+
         logging_strategy="steps",
 
         logging_steps=LOGGING_STEPS,
 
         logging_first_step=True,
 
+        # ------------------------------------
         # Saving
+        # ------------------------------------
+
         save_strategy="steps",
 
         save_steps=SAVE_STEPS,
 
         save_total_limit=SAVE_TOTAL_LIMIT,
 
+        # ------------------------------------
         # Evaluation
+        # ------------------------------------
+
         eval_strategy="no",
 
+        # ------------------------------------
         # Reporting
+        # ------------------------------------
+
         report_to="tensorboard",
 
-        run_name="ART-REVIVE-FSDP2",
+        run_name="ART-REVIVE-FSDP2-SAME-SAMPLE",
 
+        # ------------------------------------
         # Dataloader
+        # ------------------------------------
+
         dataloader_num_workers=0,
 
         dataloader_pin_memory=False,
 
+        dataloader_drop_last=False,
+
+        # ------------------------------------
         # Reproducibility
+        # ------------------------------------
+
         seed=SEED,
 
         data_seed=SEED,
 
+        # ------------------------------------
+        # Accelerate dataloader behavior
+        # ------------------------------------
+
+        accelerator_config={
+            "split_batches": False,
+
+            "dispatch_batches": False,
+
+            "even_batches": True,
+        },
+
+        # ------------------------------------
         # Distributed
+        # ------------------------------------
+
         ddp_find_unused_parameters=False,
     )
 
@@ -1101,6 +1327,11 @@ def main():
     )
 
     rank_print(
+        f"Same-sample training: "
+        f"{SAME_SAMPLE_TRAINING}"
+    )
+
+    rank_print(
         f"Per-device batch: "
         f"{PER_DEVICE_TRAIN_BATCH_SIZE}"
     )
@@ -1111,8 +1342,13 @@ def main():
     )
 
     rank_print(
-        f"Global effective batch: "
-        f"{effective_batch_size}"
+        f"Unique effective batch: "
+        f"{unique_effective_batch_size}"
+    )
+
+    rank_print(
+        f"Physical sample copies per step: "
+        f"{physical_copies_per_step}"
     )
 
     rank_print(
@@ -1132,9 +1368,11 @@ def main():
     # 16. ART TRAINER
     # ========================================================
 
-    rank_print("Creating ARTTrainer...")
+    rank_print(
+        "Creating SameSampleARTTrainer..."
+    )
 
-    trainer = ARTTrainer(
+    trainer = SameSampleARTTrainer(
         model=model,
 
         args=training_args,
@@ -1147,11 +1385,66 @@ def main():
     trainer.model_accepts_loss_kwargs = False
 
     rank_print(
-        "ARTTrainer created."
+        "SameSampleARTTrainer created."
     )
 
     # ========================================================
-    # 17. MEMORY BEFORE TRAINING
+    # 17. VERIFY SAMPLER
+    # ========================================================
+
+    rank_print()
+    rank_print("=" * 80)
+    rank_print("VERIFYING SAME-SAMPLE SAMPLER")
+    rank_print("=" * 80)
+
+    sampler = trainer._get_train_sampler(
+        train_dataset
+    )
+
+    sampler_iterator = iter(sampler)
+
+    sampler_preview = [
+        next(sampler_iterator)
+        for _ in range(2 * NUM_GPUS * 3)
+    ]
+
+    rank_print(
+        f"Sampler preview: {sampler_preview}"
+    )
+
+    # Expected for two GPUs:
+    #
+    # [A, A, B, B, C, C]
+    #
+    # This is the sampler output before
+    # Accelerate distributes batches.
+
+    for i in range(
+        0,
+        len(sampler_preview),
+        NUM_GPUS,
+    ):
+
+        group = sampler_preview[
+            i:i + NUM_GPUS
+        ]
+
+        if len(group) != NUM_GPUS:
+            raise RuntimeError(
+                "Incomplete duplicate group."
+            )
+
+        if len(set(group)) != 1:
+            raise RuntimeError(
+                "Same-sample sampler verification failed."
+            )
+
+    rank_print(
+        "Sampler duplicate groups: VERIFIED"
+    )
+
+    # ========================================================
+    # 18. MEMORY BEFORE TRAINING
     # ========================================================
 
     torch.cuda.reset_peak_memory_stats()
@@ -1161,18 +1454,18 @@ def main():
     )
 
     # ========================================================
-    # 18. TRAIN
+    # 19. TRAIN
     # ========================================================
 
     rank_print()
     rank_print("=" * 80)
-    rank_print("START ART FSDP2 TRAINING")
+    rank_print("START ART FSDP2 SAME-SAMPLE TRAINING")
     rank_print("=" * 80)
 
     train_result = trainer.train()
 
     # ========================================================
-    # 19. TRAINING RESULT
+    # 20. TRAINING RESULT
     # ========================================================
 
     rank_print()
@@ -1191,7 +1484,7 @@ def main():
     )
 
     # ========================================================
-    # 20. MEMORY AFTER TRAINING
+    # 21. MEMORY AFTER TRAINING
     # ========================================================
 
     print_gpu_memory(
@@ -1199,7 +1492,7 @@ def main():
     )
 
     # ========================================================
-    # 21. SAVE FINAL MODEL
+    # 22. SAVE FINAL MODEL
     # ========================================================
 
     rank_print()
@@ -1228,7 +1521,7 @@ def main():
     )
 
     # ========================================================
-    # 22. CLEANUP
+    # 23. CLEANUP
     # ========================================================
 
     del trainer
@@ -1244,7 +1537,9 @@ def main():
 
     rank_print()
     rank_print("=" * 80)
-    rank_print("ART FSDP2 TRAINING COMPLETE")
+    rank_print(
+        "ART FSDP2 SAME-SAMPLE TRAINING COMPLETE"
+    )
     rank_print("=" * 80)
 
 
@@ -1253,4 +1548,5 @@ def main():
 # ============================================================
 
 if __name__ == "__main__":
+
     main()
