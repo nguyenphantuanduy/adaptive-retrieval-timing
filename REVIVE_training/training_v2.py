@@ -1,3 +1,4 @@
+
 from __future__ import annotations
 
 import gc
@@ -50,8 +51,8 @@ NUM_TRAIN_EPOCHS = 0.75
 
 UNFREEZE_LAYER_PERCENTAGE = 0.40
 
-# Available: "middle"
-UNFREEZE_LAYER_REGION = "middle"
+# Available: "last"
+UNFREEZE_LAYER_REGION = "last"
 
 
 # ------------------------------------------------------------
@@ -235,34 +236,6 @@ def tokenize_training_sample(
 ) -> Dict[str, Any]:
     """
     Convert one teacher-generated sample into ART training inputs.
-
-    Pipeline:
-
-        messages
-            ↓
-        apply_chat_template(tokenize=False)
-            ↓
-        question text
-            ↓
-        tokenizer(...)
-            ↓
-        question_input_ids
-
-        teacher_generation_output + EOS
-            ↓
-        tokenizer(...)
-            ↓
-        answer_input_ids
-
-        attention_mask =
-            question_attention_mask
-            +
-            answer_attention_mask
-
-        labels =
-            [-100] * question_length
-            +
-            answer_input_ids
     """
 
     question = sample["question"]
@@ -449,10 +422,6 @@ class ARTDataCollator:
 
         feature = features[0]
 
-        # ----------------------------------------------------
-        # Convert sequence fields to tensors.
-        # ----------------------------------------------------
-
         question_input_ids = torch.as_tensor(
             feature["question_input_ids"],
             dtype=torch.long,
@@ -473,10 +442,6 @@ class ARTDataCollator:
             dtype=torch.long,
         )
 
-        # ----------------------------------------------------
-        # Sanity checks
-        # ----------------------------------------------------
-
         expected_length = (
             question_input_ids.shape[0]
             + answer_input_ids.shape[0]
@@ -495,10 +460,6 @@ class ARTDataCollator:
                 f"expected={expected_length}, "
                 f"actual={labels.shape[0]}"
             )
-
-        # ----------------------------------------------------
-        # Add batch dimension.
-        # ----------------------------------------------------
 
         return {
             "question": feature["question"],
@@ -529,7 +490,7 @@ def freeze_backbone(model) -> None:
     """
     Freeze the entire model first, then unfreeze:
 
-        - the middle 40% of decoder layers
+        - the last 40% of decoder layers
         - retrieval decision head
 
     Example:
@@ -537,8 +498,8 @@ def freeze_backbone(model) -> None:
         40% = 14.4
         ceil(14.4) = 15
 
-        Middle 15 layers:
-            layers 10-24
+        Last 15 layers:
+            layers 21-35
 
     Everything else is frozen.
     """
@@ -576,28 +537,23 @@ def freeze_backbone(model) -> None:
         num_layers * UNFREEZE_LAYER_PERCENTAGE
     )
 
-    if num_layers_to_unfreeze > num_layers:
+    if not 0 < num_layers_to_unfreeze <= num_layers:
         raise ValueError(
-            "Unfreeze percentage exceeds "
-            "the total number of decoder layers."
+            "Invalid number of layers to unfreeze: "
+            f"{num_layers_to_unfreeze}"
         )
 
     # --------------------------------------------------------
     # 4. Determine unfreeze region.
     # --------------------------------------------------------
 
-    if UNFREEZE_LAYER_REGION == "middle":
+    if UNFREEZE_LAYER_REGION == "last":
 
-        # Center the selected layer range.
         first_trainable_layer = (
             num_layers - num_layers_to_unfreeze
-        ) // 2
-
-        last_trainable_layer = (
-            first_trainable_layer
-            + num_layers_to_unfreeze
-            - 1
         )
+
+        last_trainable_layer = num_layers - 1
 
     else:
         raise ValueError(
@@ -1341,31 +1297,15 @@ def main():
     training_args = TrainingArguments(
         output_dir=OUTPUT_DIR,
 
-        # ----------------------------------------------------
-        # Epochs
-        # ----------------------------------------------------
-
         num_train_epochs=NUM_TRAIN_EPOCHS,
-
-        # ----------------------------------------------------
-        # Batch
-        # ----------------------------------------------------
 
         per_device_train_batch_size=(
             PER_DEVICE_TRAIN_BATCH_SIZE
         ),
 
-        # ----------------------------------------------------
-        # Gradient accumulation
-        # ----------------------------------------------------
-
         gradient_accumulation_steps=(
             GRADIENT_ACCUMULATION_STEPS
         ),
-
-        # ----------------------------------------------------
-        # Optimization
-        # ----------------------------------------------------
 
         learning_rate=LEARNING_RATE,
 
@@ -1373,31 +1313,15 @@ def main():
 
         max_grad_norm=MAX_GRAD_NORM,
 
-        # ----------------------------------------------------
-        # Precision
-        # ----------------------------------------------------
-
         bf16=BF16,
 
         fp16=False,
-
-        # ----------------------------------------------------
-        # Gradient checkpointing
-        # ----------------------------------------------------
 
         gradient_checkpointing=(
             GRADIENT_CHECKPOINTING
         ),
 
-        # ----------------------------------------------------
-        # ART compatibility
-        # ----------------------------------------------------
-
         remove_unused_columns=False,
-
-        # ----------------------------------------------------
-        # Logging
-        # ----------------------------------------------------
 
         logging_strategy="steps",
 
@@ -1405,39 +1329,19 @@ def main():
 
         logging_first_step=True,
 
-        # ----------------------------------------------------
-        # Saving
-        # ----------------------------------------------------
-
         save_strategy="steps",
 
         save_steps=SAVE_STEPS,
 
-        # ----------------------------------------------------
-        # Evaluation
-        # ----------------------------------------------------
-
         eval_strategy="no",
-
-        # ----------------------------------------------------
-        # Reporting
-        # ----------------------------------------------------
 
         report_to="tensorboard",
 
         run_name="ART-REVIVE",
 
-        # ----------------------------------------------------
-        # Dataloader
-        # ----------------------------------------------------
-
         dataloader_num_workers=0,
 
         dataloader_pin_memory=False,
-
-        # ----------------------------------------------------
-        # Reproducibility
-        # ----------------------------------------------------
 
         seed=SEED,
 
