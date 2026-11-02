@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 from typing import Any, Optional, Union
@@ -7,16 +6,10 @@ import torch
 from torch import nn
 from transformers import Trainer
 
-from torch.distributed.fsdp import (
-    FSDPModule,
-    register_fsdp_forward_method,
-)
-
 
 class ARTTrainer(Trainer):
     """
-    Hugging Face Trainer with automatic logging of ART retrieval statistics
-    and support for custom forward_collect() under FSDP2.
+    Hugging Face Trainer with automatic logging of ART retrieval statistics.
 
     The model is expected to expose:
 
@@ -25,55 +18,14 @@ class ARTTrainer(Trainer):
         model.retrieval_count_for_logging: list[int]
         model.retrieve_segment_indices: list[int]
         model.first_segment_retrieval_decision_score: float | None
-
-    FSDP2:
-        Registers forward_collect() as an FSDP forward method so that
-        FSDP2 executes its pre-forward and post-forward hooks correctly.
     """
+
+    # ================================================================
+    # INITIALIZATION
+    # ================================================================
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-
-        # Track which model instance has had forward_collect registered.
-        self._art_fsdp_registered_model_id = None
-
-    # ================================================================
-    # FSDP2 CUSTOM FORWARD REGISTRATION
-    # ================================================================
-
-    def _register_fsdp_forward_collect(
-        self,
-        model: nn.Module,
-    ) -> None:
-        """
-        Register forward_collect() with FSDP2.
-
-        FSDP2 automatically handles nn.Module.forward(), but custom
-        methods such as forward_collect() must be registered explicitly.
-
-        This operation is a no-op for non-FSDP2 models.
-        """
-
-        if not isinstance(model, FSDPModule):
-            return
-
-        model_id = id(model)
-
-        if self._art_fsdp_registered_model_id == model_id:
-            return
-
-        register_fsdp_forward_method(
-            model,
-            "forward_collect",
-        )
-
-        self._art_fsdp_registered_model_id = model_id
-
-        if self.is_world_process_zero():
-            print(
-                "[ARTTrainer] Registered forward_collect() "
-                "as an FSDP2 forward method."
-            )
 
     # ================================================================
     # LOGGING
@@ -91,7 +43,7 @@ class ARTTrainer(Trainer):
 
         model = self.model
 
-        # Unwrap if needed (DDP / FSDP1 / other wrappers).
+        # Unwrap if needed (DDP / other wrappers).
         if hasattr(model, "module"):
             model = model.module
 
@@ -215,12 +167,6 @@ class ARTTrainer(Trainer):
         inputs: dict[str, Union[torch.Tensor, Any]],
         num_items_in_batch: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
-
-        # ============================================================
-        # 0. REGISTER CUSTOM FORWARD METHOD FOR FSDP2
-        # ============================================================
-
-        self._register_fsdp_forward_collect(model)
 
         # ============================================================
         # 1. COLLECT TRAJECTORY
