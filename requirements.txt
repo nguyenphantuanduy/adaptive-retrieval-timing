@@ -10,3 +10,4 @@ huggingface_hub
 numpy
 tqdm
 safetensors
+tensorboard
