@@ -1,12 +1,17 @@
+
 from __future__ import annotations
 
 import json
+import random
 from pathlib import Path
 
+import numpy as np
 import torch
+
 from transformers import (
     AutoTokenizer,
     AutoModelForCausalLM,
+    GenerationConfig,
 )
 
 from shared.MuSiQue.rsearch_musique_test_dataset import (
@@ -23,38 +28,78 @@ TOKENIZER_REPO = "Qwen/Qwen2.5-3B-Instruct"
 
 DTYPE = torch.bfloat16
 
-MAX_NEW_TOKENS = 512
+SEED = 44
+MAX_NEW_TOKENS = 1024
+
+RETRIEVAL_TOPK = 5
+MAX_RETRIEVAL_CONTEXT_TOKENS = -1
 
 OUTPUT_FILE = Path(
     "REVIVE_training/result/rsearch_musique_art_top5_results.jsonl"
 )
 
-SYSTEM_PROMPT = """You are a helpful assistant that can solve the given question step by step. 
-For each step, start by explaining your thought process. 
-If additional information is needed, the system will perform retrieval and return the top search results within <observation> and </observation>. Continue your reasoning using the retrieved information. 
+SYSTEM_PROMPT = """You are a helpful assistant that can solve the given question step by step.
+For each step, start by explaining your thought process.
+If additional information is needed, the system will perform retrieval and return the top search results within <observation> and </observation>. Continue your reasoning using the retrieved information.
 When you know the final answer, provide the final answer within <answer> and </answer> tags."""
 
 
 # ============================================================
-# 1. Device
+# 1. Seed
 # ============================================================
 
-device = torch.device(
-    "cuda"
-    if torch.cuda.is_available()
-    else "cpu"
+def seed_everything(seed: int):
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed(seed)
+
+    np.random.seed(seed)
+    random.seed(seed)
+
+    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.deterministic = True
+
+    torch.cuda.manual_seed_all(seed)
+
+
+# ============================================================
+# 2. Generation Configuration
+# ============================================================
+
+generation_config = GenerationConfig(
+    # Sampling
+    do_sample=True,
+    temperature=0.1,
+    top_p=0.9,
+    top_k=0,
+
+    # Penalties
+    repetition_penalty=1.0,
+
+    # Output
+    max_new_tokens=MAX_NEW_TOKENS,
+    num_beams=1,
+    num_return_sequences=1,
 )
 
 
 # ============================================================
-# 2. Load dataset
+# 3. Device
+# ============================================================
+
+device = torch.device(
+    "cuda" if torch.cuda.is_available() else "cpu"
+)
+
+
+# ============================================================
+# 4. Load dataset
 # ============================================================
 
 dataset = load_rsearch_musique()
 
 
 # ============================================================
-# 3. Load tokenizer
+# 5. Load tokenizer
 # ============================================================
 
 tokenizer = AutoTokenizer.from_pretrained(
@@ -64,7 +109,7 @@ tokenizer = AutoTokenizer.from_pretrained(
 
 
 # ============================================================
-# 4. Load ART model
+# 6. Load ART model
 # ============================================================
 
 model = AutoModelForCausalLM.from_pretrained(
@@ -79,7 +124,7 @@ model.eval()
 
 
 # ============================================================
-# 5. Prepare output directory
+# 7. Prepare output directory
 # ============================================================
 
 OUTPUT_FILE.parent.mkdir(
@@ -89,14 +134,49 @@ OUTPUT_FILE.parent.mkdir(
 
 
 # ============================================================
-# 6. Process dataset
+# 8. Initialize random seed
+# Initialize once before evaluation
+# ============================================================
+
+seed_everything(SEED)
+
+
+# ============================================================
+# 9. Evaluation information
 # ============================================================
 
 total_samples = len(dataset)
 
+print("=" * 80)
+print("ART EVALUATION - TOP 5")
+print("=" * 80)
+
+print(f"Model                       : {MODEL_REPO}")
+print(f"Tokenizer                   : {TOKENIZER_REPO}")
+print("Dataset                     : MuSiQue R-Search")
+print(f"Device                      : {device}")
+print(f"Seed                        : {SEED}")
+print(f"Max new tokens              : {MAX_NEW_TOKENS}")
+print(f"Retrieval top-k             : {RETRIEVAL_TOPK}")
 print(
-    f"Starting ART evaluation: {total_samples} samples"
+    "Max retrieval context tokens: "
+    f"{MAX_RETRIEVAL_CONTEXT_TOKENS}"
 )
+
+print("\nGeneration configuration:")
+print(generation_config)
+
+print("=" * 80)
+
+print(
+    f"Starting ART evaluation: {total_samples} samples",
+    flush=True,
+)
+
+
+# ============================================================
+# 10. Process dataset
+# ============================================================
 
 with OUTPUT_FILE.open(
     "w",
@@ -125,7 +205,6 @@ with OUTPUT_FILE.open(
             flush=True,
         )
 
-
         # ----------------------------------------------------
         # Build chat prompt
         # ----------------------------------------------------
@@ -147,7 +226,6 @@ with OUTPUT_FILE.open(
             add_generation_prompt=True,
         )
 
-
         # ----------------------------------------------------
         # Tokenize
         # ----------------------------------------------------
@@ -160,7 +238,6 @@ with OUTPUT_FILE.open(
         input_ids = inputs["input_ids"].to(device)
         attention_mask = inputs["attention_mask"].to(device)
 
-
         # ----------------------------------------------------
         # Reset ART retrieval state
         # ----------------------------------------------------
@@ -171,6 +248,8 @@ with OUTPUT_FILE.open(
         if hasattr(model, "doc"):
             model.doc = []
 
+        if hasattr(model, "retrieval_score"):
+            model.retrieval_score = []
 
         # ----------------------------------------------------
         # Generation
@@ -182,12 +261,14 @@ with OUTPUT_FILE.open(
                 input_ids=input_ids,
                 attention_mask=attention_mask,
                 question=question,
-                max_new_tokens=MAX_NEW_TOKENS,
-                do_sample=False,
-                retrieval_topk=5,
-                max_retrieval_context_tokens=-1,
-            )
 
+                generation_config=generation_config,
+
+                retrieval_topk=RETRIEVAL_TOPK,
+                max_retrieval_context_tokens=(
+                    MAX_RETRIEVAL_CONTEXT_TOKENS
+                ),
+            )
 
         # ----------------------------------------------------
         # Decode generated response
@@ -205,26 +286,38 @@ with OUTPUT_FILE.open(
             skip_special_tokens=False,
         )
 
-
         # ----------------------------------------------------
         # Retrieve ART queries
         # ----------------------------------------------------
 
-        if hasattr(model, "query") and model.query:
-            queries = list(model.query)
-        else:
-            queries = []
-
+        queries = (
+            list(model.query)
+            if hasattr(model, "query") and model.query
+            else []
+        )
 
         # ----------------------------------------------------
         # Retrieve ART documents
         # ----------------------------------------------------
 
-        if hasattr(model, "doc") and model.doc:
-            passages = list(model.doc)
-        else:
-            passages = []
+        passages = (
+            list(model.doc)
+            if hasattr(model, "doc") and model.doc
+            else []
+        )
 
+        # ----------------------------------------------------
+        # Retrieve ART scores
+        # ----------------------------------------------------
+
+        retrieval_scores = (
+            list(model.retrieval_score)
+            if (
+                hasattr(model, "retrieval_score")
+                and model.retrieval_score
+            )
+            else []
+        )
 
         # ----------------------------------------------------
         # Build output sample
@@ -233,11 +326,9 @@ with OUTPUT_FILE.open(
         result = dict(sample)
 
         result["pure_art_answer"] = generated_text
-
         result["pure_art_passages"] = passages
-
         result["pure_art_queries"] = queries
-
+        result["pure_art_retrieval_scores"] = retrieval_scores
 
         # ----------------------------------------------------
         # Write JSONL
@@ -247,17 +338,17 @@ with OUTPUT_FILE.open(
             json.dumps(
                 result,
                 ensure_ascii=False,
-            )
-            + "\n"
+            ) + "\n"
         )
 
         output_fp.flush()
 
 
 # ============================================================
-# 7. Finished
+# 11. Finished
 # ============================================================
 
-print(
-    f"Finished. Output: {OUTPUT_FILE}"
-)
+print("=" * 80)
+print("Evaluation finished.")
+print(f"Output: {OUTPUT_FILE}")
+print("=" * 80)
