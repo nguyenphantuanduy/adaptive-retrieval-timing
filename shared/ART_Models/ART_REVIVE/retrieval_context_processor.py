@@ -303,3 +303,53 @@ class RetrievalContextProcessor:
             self.generated_token_ids,
             skip_special_tokens=False,
         )
+
+
+def main():
+    from transformers import AutoTokenizer
+
+    MODEL_NAME = "Qwen/Qwen2.5-3B-Instruct"
+
+    text = """To answer this question, we first need to identify the institute that owns The Collegian. According to the document "The Collegian (Houston Baptist University)," The Collegian is the official student publication of Houston Baptist University. Therefore, Houston Baptist University is the institute that owns The Collegian.
+
+Next, we need to determine when Houston Baptist University was founded. The document "Houston" states that Houston Baptist University was founded in 1960. Therefore, the answer is 1960.
+
+<answer>
+1960
+</answer>"""
+
+    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+
+    token_ids = tokenizer.encode(text, add_special_tokens=False)
+    token_ids.append(tokenizer.eos_token_id)
+
+    processor = RetrievalContextProcessor(
+        tokenizer=tokenizer,
+        question="When was Houston Baptist University founded?",
+        max_sentences=3,
+        language="en",
+    )
+
+    detected_queries = []
+
+    for token_id in token_ids:
+        boundary_detected = processor.feed_token(
+            torch.tensor([token_id], dtype=torch.long)
+        )
+
+        if boundary_detected:
+            query = processor.build_retrieval_query()
+            detected_queries.append(query)
+
+    print("\n" + "=" * 80)
+    print(f"RETRIEVAL QUERIES ({len(detected_queries)})")
+    print("=" * 80)
+
+    for i, query in enumerate(detected_queries, start=1):
+        print(f"\n[{i}] {query}")
+
+    print("\n" + "=" * 80)
+
+
+if __name__ == "__main__":
+    main()
