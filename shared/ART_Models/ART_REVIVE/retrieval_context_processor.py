@@ -305,51 +305,86 @@ class RetrievalContextProcessor:
         )
 
 
-def main():
+if __name__ == "__main__":
     from transformers import AutoTokenizer
 
     MODEL_NAME = "Qwen/Qwen2.5-3B-Instruct"
 
-    text = """To answer this question, we first need to identify the institute that owns The Collegian. According to the document "The Collegian (Houston Baptist University)," The Collegian is the official student publication of Houston Baptist University. Therefore, Houston Baptist University is the institute that owns The Collegian.
+    QUESTION = "When did the French come to the Caribbean?"
 
-Next, we need to determine when Houston Baptist University was founded. The document "Houston" states that Houston Baptist University was founded in 1960. Therefore, the answer is 1960.
+    TEXT = """To answer this question, we first need to identify which group the battle first appeared to favor. According to the document "Franco-Prussian War," the battle initially appeared to favor the French due to their superior Chassepot rifle.
+
+Next, we need to determine the middle leg of the journey from England to Africa to the Americas. The document "Triangular trade" describes the historical trade routes, including the Caribbean as a key stop in the triangular trade between Europe, Africa, and the Americas. Therefore, the middle leg of the journey is the Caribbean.
+
+Finally, we need to determine when the people who were initially favored in the battle (the French) came to the Caribbean. The document "French West Indies" states that Pierre Belain d'Esnambuc sailed to the Caribbean in 1625, hoping to establish a French settlement on the island of St. Christopher (St. Kitts). This indicates that the French presence in the Caribbean began in 1625. Therefore, the answer is 1625.
 
 <answer>
-1960
+1625
 </answer>"""
 
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
-
-    token_ids = tokenizer.encode(text, add_special_tokens=False)
-    token_ids.append(tokenizer.eos_token_id)
+    tokenizer = AutoTokenizer.from_pretrained(
+        MODEL_NAME
+    )
 
     processor = RetrievalContextProcessor(
         tokenizer=tokenizer,
-        question="When was Houston Baptist University founded?",
+        question=QUESTION,
         max_sentences=3,
         language="en",
     )
 
-    detected_queries = []
+    token_ids = tokenizer.encode(
+        TEXT,
+        add_special_tokens=False,
+    )
+
+    total_boundaries = 0
+
+    print("\n" + "=" * 90)
+    print("             RETRIEVAL CONTEXT PROCESSOR TEST")
+    print("=" * 90)
+
+    print(f"Question: {QUESTION}")
+    print(f"Total generated tokens: {len(token_ids)}")
 
     for token_id in token_ids:
+
         boundary_detected = processor.feed_token(
             torch.tensor([token_id], dtype=torch.long)
         )
 
-        if boundary_detected:
-            query = processor.build_retrieval_query()
-            detected_queries.append(query)
+        if not boundary_detected:
+            continue
 
-    print("\n" + "=" * 80)
-    print(f"RETRIEVAL QUERIES ({len(detected_queries)})")
-    print("=" * 80)
+        total_boundaries += 1
 
-    for i, query in enumerate(detected_queries, start=1):
-        print(f"\n[{i}] {query}")
+        # Latest sentence detected by online StreamSegmenter.
+        detected_segment = tokenizer.decode(
+            processor.get_last_sentence().tolist(),
+            skip_special_tokens=False,
+        ).strip()
 
-    print("\n" + "=" * 80)
+        # Current context window.
+        context = tokenizer.decode(
+            processor.get_context().tolist(),
+            skip_special_tokens=False,
+        ).strip()
 
+        # Retrieval query extracted using static segmentation.
+        retrieval_query = processor.build_retrieval_query()
 
-if __name__ == "__main__":
-    main()
+        print("\n" + "━" * 90)
+        print(f"  BOUNDARY #{total_boundaries:02d}")
+        print("━" * 90)
+
+        print("\n[DETECTED SEGMENT]")
+        print("-" * 90)
+        print(detected_segment)
+
+        print("\n[RETRIEVAL QUERY]")
+        print("-" * 90)
+        print(retrieval_query)
+
+    print("\n" + "=" * 90)
+    print(f"TOTAL DETECTED BOUNDARIES: {total_boundaries}")
+    print("=" * 90)

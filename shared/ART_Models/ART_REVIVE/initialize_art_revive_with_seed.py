@@ -65,7 +65,7 @@ from transformers import (
 # Configuration
 # =============================================================================
 
-SEED = 42
+SEED = 44
 
 CUSTOM_MODEL_DIR = Path(__file__).resolve().parent
 

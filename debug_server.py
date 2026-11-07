@@ -13,10 +13,12 @@ from shared.MuSiQue.load_dataset import load_musique_ans
 # ============================================================
 
 DEFAULT_INPUT_FILE = (
-    r"REVIVE_training\result\rsearch_musique_art_top5_results.jsonl"
+    r"REVIVE_training\result\rsearch_musique_art_results.jsonl"
 )
 
-TOP_K = 5
+# DEFAULT_INPUT_FILE = r"temp/threshold60.jsonl"
+
+TOP_K = 3
 # DEFAULT_INPUT_FILE = (
 #     r"REVIVE_training\result\rsearch_musique_art_results.jsonl"
 # )
