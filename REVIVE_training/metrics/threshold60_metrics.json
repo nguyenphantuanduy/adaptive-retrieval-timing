@@ -1,0 +1,14 @@
+{
+  "num_samples": 500,
+  "answer_extraction": {
+    "has_answer_tag": 486,
+    "has_answer_tag_percent": 97.2,
+    "no_answer_tag": 14,
+    "no_answer_tag_percent": 2.8
+  },
+  "metrics": {
+    "Acc": 26.0,
+    "F1": 32.08,
+    "EM": 22.8
+  }
+}

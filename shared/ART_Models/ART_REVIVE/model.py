@@ -48,12 +48,12 @@ THRESHOLD = 0.4297
 RETRIEVAL_COST = 0.05
 # THRESHOLD = 0.5
 # RETRIEVAL_COST = 0.05
-MAX_RETRIEVAL_CONTEXT_TOKENS = 1000
+MAX_RETRIEVAL_CONTEXT_TOKENS = 500
 MAX_RETRIEVAL_COUNT = 4
 MAX_EXPLORATION_PROBABILITY = 0.5
 MIN_EXPLORATION_PROBABILITY = 0.1
 INIT_EXPLORATION_PROBABILITY = 0.3
-DEFAULT_RETRIEVAL_TOPK = 5
+
 import random
 
 SEED = 42
@@ -455,7 +455,7 @@ class AttentionMixingProbeForCausalLM(
     def _get_retriever(self):
         if self.retriever is None:
             self.retriever = MuSiQueRetrievalDB(
-                top_k=DEFAULT_RETRIEVAL_TOPK,
+                top_k=3,
             )
         return self.retriever
 
@@ -531,7 +531,7 @@ class AttentionMixingProbeForCausalLM(
         # =====================================================================
         # ART-specific inputs
         # =====================================================================
-        retrieval_topk: int = DEFAULT_RETRIEVAL_TOPK,
+        retrieval_topk: int = 3,
         max_retrieval_context_tokens: int = MAX_RETRIEVAL_CONTEXT_TOKENS,
         question: str | None = None,
         # question_input_ids: torch.LongTensor | None = None,
@@ -1215,7 +1215,7 @@ class AttentionMixingProbeForCausalLM(
     def forward_generate(
         self,
         input_ids: torch.LongTensor | None = None,
-        retrieval_topk: int = DEFAULT_RETRIEVAL_TOPK,
+        retrieval_topk: int = 3,
         max_retrieval_context_tokens: int = MAX_RETRIEVAL_CONTEXT_TOKENS,
 
         # =====================================================================

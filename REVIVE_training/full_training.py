@@ -23,7 +23,7 @@ from REVIVE_training.trainer import ARTTrainer
 
 DATASET_NAME = (
     "adaptive-retrieval-timing/"
-    "MuSiQue-ART-Training"
+    "MuSiQue-ART-Training-v2"
 )
 
 MODEL_REPO = (
@@ -43,6 +43,13 @@ SEED = 42
 # ------------------------------------------------------------
 
 NUM_TRAIN_EPOCHS = 0.75
+
+
+# ------------------------------------------------------------
+# Full fine-tuning
+# ------------------------------------------------------------
+
+FULL_FINE_TUNING = True
 
 
 # ------------------------------------------------------------
@@ -88,16 +95,6 @@ BF16 = True
 
 # ------------------------------------------------------------
 # Gradient checkpointing
-#
-# During forward_training():
-#
-#   forward_collect()
-#       -> temporarily disables checkpointing
-#
-#   trajectory replay
-#       -> enables checkpointing
-#
-# Therefore Trainer-level gradient checkpointing can stay enabled.
 # ------------------------------------------------------------
 
 GRADIENT_CHECKPOINTING = True
@@ -105,8 +102,6 @@ GRADIENT_CHECKPOINTING = True
 
 # ------------------------------------------------------------
 # Retrieval threshold
-#
-# Must match the threshold used inside the ART model.
 # ------------------------------------------------------------
 
 THRESHOLD = 0.4297
@@ -116,9 +111,9 @@ THRESHOLD = 0.4297
 # SYSTEM PROMPT
 # ============================================================
 
-SYSTEM_PROMPT = """You are a helpful assistant that can solve the given question step by step.
-For each step, start by explaining your thought process.
-If additional information is needed, the system will perform retrieval and return the top search results within <observation> and </observation>. Continue your reasoning using the retrieved information.
+SYSTEM_PROMPT = """You are a helpful assistant that can solve the given question step by step. 
+For each step, start by explaining your thought process. 
+If additional information is needed, the system will perform retrieval and return the top search results within <observation> and </observation>. Continue your reasoning using the retrieved information. 
 When you know the final answer, provide the final answer within <answer> and </answer> tags."""
 
 
@@ -146,7 +141,7 @@ def set_seed(seed: int) -> None:
 
 def load_teacher_generated_training() -> Dict[str, Any]:
     """
-    Load teacher-generated training datasets.
+    Load teacher-generated training datasets from v2.
 
     Returns
     -------
@@ -246,6 +241,18 @@ def tokenize_training_sample(
         sample["teacher_generation_output"]
     )
 
+    if not isinstance(teacher_generation_output, str):
+        raise ValueError(
+            "Invalid teacher_generation_output: "
+            f"expected str, got "
+            f"{type(teacher_generation_output).__name__}"
+        )
+
+    if not teacher_generation_output.strip():
+        raise ValueError(
+            "Empty teacher_generation_output."
+        )
+
     # ========================================================
     # 1. BUILD CHAT-TEMPLATED QUESTION STRING
     # ========================================================
@@ -305,13 +312,11 @@ def tokenize_training_sample(
     # ========================================================
 
     question_attention_mask = [
-        1
-        for _ in question_input_ids
+        1 for _ in question_input_ids
     ]
 
     answer_attention_mask = [
-        1
-        for _ in answer_input_ids
+        1 for _ in answer_input_ids
     ]
 
     attention_mask = (
@@ -332,22 +337,19 @@ def tokenize_training_sample(
     # 6. SANITY CHECKS
     # ========================================================
 
-    if len(attention_mask) != len(labels):
-
-        raise ValueError(
-            "attention_mask and labels length mismatch: "
-            f"attention_mask={len(attention_mask)}, "
-            f"labels={len(labels)}"
-        )
-
-    if (
+    expected_length = (
         len(question_input_ids)
         + len(answer_input_ids)
-        != len(labels)
-    ):
+    )
 
+    if len(attention_mask) != expected_length:
         raise ValueError(
-            "Question + answer length does not match labels."
+            "attention_mask length mismatch."
+        )
+
+    if len(labels) != expected_length:
+        raise ValueError(
+            "labels length mismatch."
         )
 
     # ========================================================
@@ -356,13 +358,9 @@ def tokenize_training_sample(
 
     return {
         "question": question,
-
         "question_input_ids": question_input_ids,
-
         "answer_input_ids": answer_input_ids,
-
         "attention_mask": attention_mask,
-
         "labels": labels,
     }
 
@@ -414,7 +412,6 @@ class ARTDataCollator:
     ) -> Dict[str, Any]:
 
         if len(features) != 1:
-
             raise ValueError(
                 "ARTDataCollator expects "
                 "per_device_train_batch_size=1."
@@ -448,7 +445,6 @@ class ARTDataCollator:
         )
 
         if attention_mask.shape[0] != expected_length:
-
             raise ValueError(
                 "Attention mask length mismatch: "
                 f"expected={expected_length}, "
@@ -456,7 +452,6 @@ class ARTDataCollator:
             )
 
         if labels.shape[0] != expected_length:
-
             raise ValueError(
                 "Labels length mismatch: "
                 f"expected={expected_length}, "
@@ -485,90 +480,66 @@ class ARTDataCollator:
 
 
 # ============================================================
-# FULL MODEL UNFREEZE
+# CONFIGURE FULL FINE-TUNING
 # ============================================================
 
-def unfreeze_full_model(model) -> None:
+def freeze_backbone(model) -> None:
     """
-    Unfreeze every parameter in the model.
+    Enable gradient updates for every model parameter.
 
-    All model components are trainable, including:
-
-        - Decoder layers
-        - Retrieval decision head
-        - Token embeddings
+    This configures full fine-tuning:
+        - token embeddings
+        - all decoder layers
+        - final normalization layer
         - LM head
-        - Final normalization
-        - Other model parameters
+        - retrieval decision head
+        - any other trainable parameters registered in the model
     """
 
     print()
     print("=" * 80)
-    print("FULL MODEL FINE-TUNING")
+    print("CONFIGURING FULL FINE-TUNING")
     print("=" * 80)
+
+    if not FULL_FINE_TUNING:
+        raise RuntimeError(
+            "This script is configured for full fine-tuning only."
+        )
+
+    total_parameters = 0
+    trainable_parameters = 0
 
     for parameter in model.parameters():
         parameter.requires_grad = True
 
-    # --------------------------------------------------------
-    # Report decoder layers
-    # --------------------------------------------------------
+        parameter_count = parameter.numel()
+        total_parameters += parameter_count
 
-    if hasattr(model, "model") and hasattr(model.model, "layers"):
+        if parameter.requires_grad:
+            trainable_parameters += parameter_count
 
-        layers = model.model.layers
-
-        print(
-            f"Total decoder layers: {len(layers)}"
-        )
-
-        for index, layer in enumerate(layers):
-
-            trainable = all(
-                parameter.requires_grad
-                for parameter in layer.parameters()
-            )
-
-            print(
-                f"Layer {index:02d}: "
-                f"{'TRAINABLE' if trainable else 'FROZEN'}"
-            )
-
-    # --------------------------------------------------------
-    # Report retrieval decision head
-    # --------------------------------------------------------
-
-    if hasattr(model, "retrieval_decision_head"):
-
-        decision_head_trainable = all(
-            parameter.requires_grad
-            for parameter in model.retrieval_decision_head.parameters()
-        )
-
-        print(
-            "Retrieval decision head: "
-            f"{'TRAINABLE' if decision_head_trainable else 'FROZEN'}"
-        )
-
-    # --------------------------------------------------------
-    # Verify all parameters
-    # --------------------------------------------------------
-
-    frozen_parameters = [
-        name
-        for name, parameter in model.named_parameters()
-        if not parameter.requires_grad
-    ]
-
-    if frozen_parameters:
-
+    if trainable_parameters != total_parameters:
         raise RuntimeError(
-            "Some model parameters are still frozen:\n"
-            + "\n".join(frozen_parameters[:20])
+            "Full fine-tuning verification failed: "
+            f"{trainable_parameters:,}/{total_parameters:,} "
+            "parameters are trainable."
         )
+
+    print(f"Total parameters     : {total_parameters:,}")
+    print(f"Trainable parameters : {trainable_parameters:,}")
+    print(f"Frozen parameters    : {total_parameters - trainable_parameters:,}")
+    print(
+        f"Trainable percentage : "
+        f"{100.0 * trainable_parameters / total_parameters:.4f}%"
+    )
 
     print()
-    print("All model parameters are TRAINABLE.")
+    print("All model parameters: TRAINABLE")
+    print("Embedding: TRAINABLE")
+    print("All decoder layers: TRAINABLE")
+    print("Final norm: TRAINABLE")
+    print("LM head: TRAINABLE")
+    print("Retrieval decision head: TRAINABLE")
     print("=" * 80)
 
 
@@ -592,8 +563,7 @@ def print_parameter_summary(model) -> None:
             trainable_parameters += count
 
     frozen_parameters = (
-        total_parameters
-        - trainable_parameters
+        total_parameters - trainable_parameters
     )
 
     trainable_percentage = (
@@ -646,7 +616,6 @@ def get_decision_head_linear_layers(model):
     ]
 
     if not linear_layers:
-
         raise RuntimeError(
             "No Linear layers found inside "
             "retrieval_decision_head."
@@ -741,7 +710,9 @@ def print_decision_head_summary(
 # GPU MEMORY
 # ============================================================
 
-def print_gpu_memory(title: str) -> None:
+def print_gpu_memory(
+    title: str,
+) -> None:
 
     if not torch.cuda.is_available():
         return
@@ -751,7 +722,9 @@ def print_gpu_memory(title: str) -> None:
     print(title)
     print("=" * 80)
 
-    for gpu_index in range(torch.cuda.device_count()):
+    for gpu_index in range(
+        torch.cuda.device_count()
+    ):
 
         allocated = (
             torch.cuda.memory_allocated(gpu_index)
@@ -786,7 +759,7 @@ def main():
 
     print()
     print("=" * 80)
-    print("ART FULL MODEL TRAINING")
+    print("ART TRAINING")
     print("=" * 80)
 
     # ========================================================
@@ -838,19 +811,16 @@ def main():
     )
 
     if tokenizer.eos_token is None:
-
         raise ValueError(
             "Tokenizer does not have an EOS token."
         )
 
     print(
-        f"EOS token: "
-        f"{repr(tokenizer.eos_token)}"
+        f"EOS token: {repr(tokenizer.eos_token)}"
     )
 
     print(
-        f"EOS token ID: "
-        f"{tokenizer.eos_token_id}"
+        f"EOS token ID: {tokenizer.eos_token_id}"
     )
 
     # ========================================================
@@ -920,8 +890,7 @@ def main():
     print()
 
     expected_length = (
-        question_length
-        + answer_length
+        question_length + answer_length
     )
 
     print(
@@ -930,14 +899,12 @@ def main():
     )
 
     if attention_length != expected_length:
-
         raise ValueError(
             "Attention mask does not cover "
             "question + answer."
         )
 
     if label_length != expected_length:
-
         raise ValueError(
             "Labels do not cover "
             "question + answer."
@@ -969,10 +936,7 @@ def main():
         attn_implementation="eager",
     )
 
-    print(
-        f"Model loaded: "
-        f"{MODEL_REPO}"
-    )
+    print(f"Model loaded: {MODEL_REPO}")
 
     print(
         f"Model hidden size: "
@@ -1059,6 +1023,10 @@ def main():
         f"{initial_scores.max().item():.8f}"
     )
 
+    # --------------------------------------------------------
+    # Zero hidden state
+    # --------------------------------------------------------
+
     zero_hidden = torch.zeros(
         1,
         1,
@@ -1124,7 +1092,6 @@ def main():
             model,
             "gradient_checkpointing_enable",
         ):
-
             raise RuntimeError(
                 "Model does not support "
                 "gradient checkpointing."
@@ -1132,7 +1099,9 @@ def main():
 
         model.gradient_checkpointing_enable()
 
-        print("Gradient checkpointing: ENABLED")
+        print(
+            "Gradient checkpointing: ENABLED"
+        )
 
     else:
 
@@ -1140,10 +1109,11 @@ def main():
             model,
             "gradient_checkpointing_disable",
         ):
-
             model.gradient_checkpointing_disable()
 
-        print("Gradient checkpointing: DISABLED")
+        print(
+            "Gradient checkpointing: DISABLED"
+        )
 
     model.config.use_cache = True
 
@@ -1155,13 +1125,13 @@ def main():
     print("=" * 80)
 
     # ========================================================
-    # 13. FULL MODEL UNFREEZE
+    # 13. FREEZE / UNFREEZE
     # ========================================================
 
     print()
-    print("9. Unfreezing the entire model...")
+    print("9. Configuring full fine-tuning...")
 
-    unfreeze_full_model(model)
+    freeze_backbone(model)
 
     print_parameter_summary(model)
 
@@ -1186,14 +1156,12 @@ def main():
     if BF16:
 
         if not torch.cuda.is_available():
-
             raise RuntimeError(
                 "BF16 training is enabled but CUDA "
                 "is not available."
             )
 
         if not torch.cuda.is_bf16_supported():
-
             raise RuntimeError(
                 "BF16 training is enabled but "
                 "this GPU does not support BF16."
@@ -1202,31 +1170,15 @@ def main():
     training_args = TrainingArguments(
         output_dir=OUTPUT_DIR,
 
-        # ----------------------------------------------------
-        # Epochs
-        # ----------------------------------------------------
-
         num_train_epochs=NUM_TRAIN_EPOCHS,
-
-        # ----------------------------------------------------
-        # Batch
-        # ----------------------------------------------------
 
         per_device_train_batch_size=(
             PER_DEVICE_TRAIN_BATCH_SIZE
         ),
 
-        # ----------------------------------------------------
-        # Gradient accumulation
-        # ----------------------------------------------------
-
         gradient_accumulation_steps=(
             GRADIENT_ACCUMULATION_STEPS
         ),
-
-        # ----------------------------------------------------
-        # Optimization
-        # ----------------------------------------------------
 
         learning_rate=LEARNING_RATE,
 
@@ -1234,31 +1186,15 @@ def main():
 
         max_grad_norm=MAX_GRAD_NORM,
 
-        # ----------------------------------------------------
-        # Precision
-        # ----------------------------------------------------
-
         bf16=BF16,
 
         fp16=False,
-
-        # ----------------------------------------------------
-        # Gradient checkpointing
-        # ----------------------------------------------------
 
         gradient_checkpointing=(
             GRADIENT_CHECKPOINTING
         ),
 
-        # ----------------------------------------------------
-        # ART cache compatibility
-        # ----------------------------------------------------
-
         remove_unused_columns=False,
-
-        # ----------------------------------------------------
-        # Logging
-        # ----------------------------------------------------
 
         logging_strategy="steps",
 
@@ -1266,46 +1202,28 @@ def main():
 
         logging_first_step=True,
 
-        # ----------------------------------------------------
-        # Saving
-        # ----------------------------------------------------
-
         save_strategy="steps",
 
         save_steps=SAVE_STEPS,
 
-        # ----------------------------------------------------
-        # Evaluation
-        # ----------------------------------------------------
-
         eval_strategy="no",
-
-        # ----------------------------------------------------
-        # Reporting
-        # ----------------------------------------------------
 
         report_to="tensorboard",
 
-        run_name="ART-REVIVE-FULL-FT",
-
-        # ----------------------------------------------------
-        # Dataloader
-        # ----------------------------------------------------
+        run_name="ART-REVIVE",
 
         dataloader_num_workers=0,
 
         dataloader_pin_memory=False,
-
-        # ----------------------------------------------------
-        # Reproducibility
-        # ----------------------------------------------------
 
         seed=SEED,
 
         data_seed=SEED,
     )
 
-    print(f"Epochs: {NUM_TRAIN_EPOCHS}")
+    print(
+        f"Epochs: {NUM_TRAIN_EPOCHS}"
+    )
 
     print(
         f"Per-device batch size: "
@@ -1322,16 +1240,23 @@ def main():
         f"{PER_DEVICE_TRAIN_BATCH_SIZE * GRADIENT_ACCUMULATION_STEPS}"
     )
 
-    print(f"Learning rate: {LEARNING_RATE}")
+    print(
+        f"Learning rate: {LEARNING_RATE}"
+    )
 
-    print("Trainable parameters: 100%")
+    print(
+        f"Full fine-tuning: "
+        f"{FULL_FINE_TUNING}"
+    )
 
     print(
         f"Gradient checkpointing: "
         f"{GRADIENT_CHECKPOINTING}"
     )
 
-    print(f"Decision threshold: {THRESHOLD}")
+    print(
+        f"Decision threshold: {THRESHOLD}"
+    )
 
     # ========================================================
     # 16. TRAINER
@@ -1349,9 +1274,13 @@ def main():
 
     trainer.model_accepts_loss_kwargs = False
 
-    print("Trainer created successfully.")
+    print(
+        "Trainer created successfully."
+    )
 
-    print("num_items_in_batch: DISABLED")
+    print(
+        "num_items_in_batch: DISABLED"
+    )
 
     # ========================================================
     # 17. MEMORY BEFORE TRAINING
@@ -1371,7 +1300,7 @@ def main():
 
     print()
     print("=" * 80)
-    print("13. START FULL MODEL TRAINING")
+    print("13. START TRAINING")
     print("=" * 80)
 
     train_result = trainer.train()
@@ -1505,7 +1434,9 @@ def main():
         f"{final_zero_score:.8f}"
     )
 
-    print(f"Threshold: {THRESHOLD:.8f}")
+    print(
+        f"Threshold: {THRESHOLD:.8f}"
+    )
 
     print("=" * 80)
 
@@ -1518,11 +1449,20 @@ def main():
     print("ART TRAINING STATE")
     print("=" * 80)
 
-    print(f"isTraining      : {model.isTraining}")
+    print(
+        f"isTraining      : "
+        f"{model.isTraining}"
+    )
 
-    print(f"retrieval_count : {model.retrieval_count}")
+    print(
+        f"retrieval_count : "
+        f"{model.retrieval_count}"
+    )
 
-    if hasattr(model, "retrieval_count_for_logging"):
+    if hasattr(
+        model,
+        "retrieval_count_for_logging",
+    ):
 
         retrieval_counts = getattr(
             model,
@@ -1542,7 +1482,10 @@ def main():
                 f"{sum(retrieval_counts) / len(retrieval_counts):.6f}"
             )
 
-    if hasattr(model, "retrieval_scores"):
+    if hasattr(
+        model,
+        "retrieval_scores",
+    ):
 
         retrieval_scores = getattr(
             model,
@@ -1555,7 +1498,9 @@ def main():
             f"{len(retrieval_scores)}"
         )
 
-        for index, score in enumerate(retrieval_scores):
+        for index, score in enumerate(
+            retrieval_scores
+        ):
 
             if isinstance(score, torch.Tensor):
 
@@ -1617,7 +1562,7 @@ def main():
 
     print()
     print("=" * 80)
-    print("FULL MODEL TRAINING COMPLETE")
+    print("TRAINING COMPLETE")
     print("=" * 80)
 
 
