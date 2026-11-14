@@ -324,7 +324,7 @@ class MuSiQueRetrievalDB:
         # Add observation markers AFTER truncation
         # --------------------------------------------------------------
 
-        observation =  append_retrieval_observation(passages)
+        observation =  format_search_query(query) + append_retrieval_observation(passages)
 
         if return_passages:
             return observation, passage_parts
@@ -424,3 +424,6 @@ def append_retrieval_observation(observation):
         "<|im_end|>\n"
         "<|im_start|>assistant\n"
     )
+
+def format_search_query(query: str) -> str:
+    return f"\n<search>{query}</search>\n"

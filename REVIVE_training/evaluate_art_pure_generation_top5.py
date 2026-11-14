@@ -14,9 +14,12 @@ from transformers import (
     GenerationConfig,
 )
 
-from shared.MuSiQue.rsearch_musique_test_dataset import (
-    load_rsearch_musique,
-)
+# from shared.MuSiQue.rsearch_musique_test_dataset import (
+#     load_rsearch_musique,
+# )
+
+from shared.HotpotQA_Distractor.rsearch_hotpotqa_test_dataset import load_rsearch_hotpotqa
+
 
 
 # ============================================================
@@ -34,8 +37,11 @@ MAX_NEW_TOKENS = 1024
 RETRIEVAL_TOPK = 5
 MAX_RETRIEVAL_CONTEXT_TOKENS = -1
 
+# OUTPUT_FILE = Path(
+#     "REVIVE_training/result/rsearch_musique_art_top5_results.jsonl"
+# )
 OUTPUT_FILE = Path(
-    "REVIVE_training/result/rsearch_musique_art_top5_results.jsonl"
+    "REVIVE_training/result/rsearch_hotpotqa_art_top5_results.jsonl"
 )
 
 SYSTEM_PROMPT = """You are a helpful assistant that can solve the given question step by step.
@@ -95,8 +101,8 @@ device = torch.device(
 # 4. Load dataset
 # ============================================================
 
-dataset = load_rsearch_musique()
-
+# dataset = load_rsearch_musique()
+dataset = load_rsearch_hotpotqa()
 
 # ============================================================
 # 5. Load tokenizer
@@ -153,7 +159,8 @@ print("=" * 80)
 
 print(f"Model                       : {MODEL_REPO}")
 print(f"Tokenizer                   : {TOKENIZER_REPO}")
-print("Dataset                     : MuSiQue R-Search")
+# print("Dataset                     : MuSiQue R-Search")
+print("Dataset                     : HotpotQA R-Search")
 print(f"Device                      : {device}")
 print(f"Seed                        : {SEED}")
 print(f"Max new tokens              : {MAX_NEW_TOKENS}")
