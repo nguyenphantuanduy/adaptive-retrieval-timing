@@ -19,7 +19,7 @@ from transformers import (
 # )
 
 # from shared.HotpotQA_Distractor.rsearch_hotpotqa_test_dataset import load_rsearch_hotpotqa
-from shared.2WikiMultiHopQA.rsearch_2wikimultihopqa_test_dataset import load_rsearch_2wikimultihopqa
+from shared.TwoWikiMultiHopQA.rsearch_2wikimultihopqa_test_dataset import load_rsearch_2wikimultihopqa
 # ============================================================
 # Configuration
 # ============================================================
