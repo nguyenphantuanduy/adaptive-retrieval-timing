@@ -45,15 +45,16 @@ from .utils import (
 )
 
 THRESHOLD = 0.4297
+# THRESHOLD = 0.5
 RETRIEVAL_COST = 0.05
 # THRESHOLD = 0.5
 # RETRIEVAL_COST = 0.05
-MAX_RETRIEVAL_CONTEXT_TOKENS = 1000
+MAX_RETRIEVAL_CONTEXT_TOKENS = 500
 MAX_RETRIEVAL_COUNT = 4
 MAX_EXPLORATION_PROBABILITY = 0.5
 MIN_EXPLORATION_PROBABILITY = 0.1
 INIT_EXPLORATION_PROBABILITY = 0.3
-DEFAULT_RETRIEVAL_TOPK = 5
+
 import random
 
 SEED = 42
@@ -82,78 +83,6 @@ FORBIDDEN_TERMS = {
     "<observation>",
     "</observation>",
 }
-
-# ============================================================
-# Exponential saturation retrieval cost
-# ============================================================
-
-# RETRIEVAL_COST_L = -3.697402
-# RETRIEVAL_COST_U = 0.278405
-# RETRIEVAL_COST_K = 4.572680
-# RETRIEVAL_COST_D0 = 0.545356
-
-
-# def compute_retrieval_cost(
-#         total_decision_score: torch.Tensor,
-#     ) -> torch.Tensor:
-
-#         d = total_decision_score
-
-#         # ====================================================
-#         # Antiderivative G(d)
-#         #
-#         # g(d) = L + (U - L) * (1 - exp(-k*d))
-#         #       = U - (U - L) * exp(-k*d)
-#         #
-#         # G'(d) = g(d)
-#         # ====================================================
-
-#         exp_d = torch.exp(
-#             -RETRIEVAL_COST_K * d
-#         )
-
-#         exp_d0 = torch.exp(
-#             torch.tensor(
-#                 -RETRIEVAL_COST_K
-#                 * RETRIEVAL_COST_D0,
-#                 device=d.device,
-#                 dtype=d.dtype,
-#             )
-#         )
-
-#         G_d = (
-#             RETRIEVAL_COST_U
-#             * (
-#                 d
-#                 - RETRIEVAL_COST_D0
-#             )
-#             + (
-#                 (
-#                     RETRIEVAL_COST_U
-#                     - RETRIEVAL_COST_L
-#                 )
-#                 / RETRIEVAL_COST_K
-#             )
-#             * (
-#                 exp_d
-#                 - exp_d0
-#             )
-#         )
-
-#         # ====================================================
-#         # Piecewise retrieval cost
-#         #
-#         # d < D0  -> -G(d)
-#         # d >= D0 -> 0.05 * d
-#         # ====================================================
-
-#         retrieval_cost = torch.where(
-#             d < RETRIEVAL_COST_D0,
-#             -G_d,
-#             0.05 * d,
-#         )
-
-#         return retrieval_cost.sum()
 
 def compute_retrieval_cost(
         total_decision_score: torch.Tensor,
@@ -384,6 +313,7 @@ class RetrievalDecisionHead(nn.Module):
 
 from .musique_retrieval_db import MuSiQueRetrievalDB
 from .hotpotqa_retrieval_db import HotpotQARetrievalDB
+from .two_wikimultihopqa_db import TwoWikiMultiHopQARetrievalDB
 
 class AttentionMixingProbeForCausalLM(
     AttentionMixingProbePreTrainedModel,
@@ -452,12 +382,12 @@ class AttentionMixingProbeForCausalLM(
     def disable_training_mode(self):
         self.isTraining = False
 
-    def _get_retriever(self):
-        if self.retriever is None:
-            self.retriever = MuSiQueRetrievalDB(
-                top_k=DEFAULT_RETRIEVAL_TOPK,
-            )
-        return self.retriever
+    # def _get_retriever(self):
+    #     if self.retriever is None:
+    #         self.retriever = MuSiQueRetrievalDB(
+    #             top_k=3,
+    #         )
+    #     return self.retriever
 
     # def _get_retriever(self):
     #         if self.retriever is None:
@@ -465,6 +395,13 @@ class AttentionMixingProbeForCausalLM(
     #                 top_k=3,
     #             )
     #         return self.retriever
+
+    def _get_retriever(self):
+            if self.retriever is None:
+                self.retriever = TwoWikiMultiHopQARetrievalDB(
+                    top_k=3,
+                )
+            return self.retriever
 
     def _get_tokenizer(self):
         if self.tokenizer is None:
@@ -531,7 +468,7 @@ class AttentionMixingProbeForCausalLM(
         # =====================================================================
         # ART-specific inputs
         # =====================================================================
-        retrieval_topk: int = DEFAULT_RETRIEVAL_TOPK,
+        retrieval_topk: int = 3,
         max_retrieval_context_tokens: int = MAX_RETRIEVAL_CONTEXT_TOKENS,
         question: str | None = None,
         # question_input_ids: torch.LongTensor | None = None,
@@ -602,6 +539,8 @@ class AttentionMixingProbeForCausalLM(
         inputs_embeds: torch.FloatTensor | None = None,
         labels: torch.LongTensor | None = None,
         logits_to_keep: int | torch.Tensor = 0,
+        isCritic: bool = False,
+        do_exploration: bool = True,
         **kwargs: Unpack[TransformersKwargs],
     ) -> dict:
 
@@ -738,7 +677,7 @@ class AttentionMixingProbeForCausalLM(
             # -----------------------------------------------------------------
 
             
-            retrieval_text = self._get_retriever().search(
+            retrieval_text, retrieval_text_with_query = self._get_retriever().search(
                 query=question,
                 tokenizer=self._get_tokenizer(),
                 max_passage_tokens=MAX_RETRIEVAL_CONTEXT_TOKENS,
@@ -762,6 +701,18 @@ class AttentionMixingProbeForCausalLM(
 
             document_length = (
                 document_input_ids.shape[1]
+            )
+
+            retrieval_text_collect = retrieval_text_with_query if isCritic else retrieval_text
+
+            document_inputs_collect = self._get_tokenizer()(
+                retrieval_text_collect,
+                return_tensors="pt",
+            )
+            
+            document_input_ids_collect = (
+                document_inputs_collect["input_ids"]
+                .to(question_input_ids.device)
             )
 
             # -----------------------------------------------------------------
@@ -815,7 +766,7 @@ class AttentionMixingProbeForCausalLM(
             input_ids_buffer = torch.cat(
                 [
                     input_ids_buffer,
-                    document_input_ids,
+                    document_input_ids_collect,
                 ],
                 dim=1,
             )
@@ -950,7 +901,7 @@ class AttentionMixingProbeForCausalLM(
             # -----------------------------------------------------------------
 
             if (
-                ( new_decision_score.item() >= THRESHOLD or flip_coin(probability) )
+                ( new_decision_score.item() >= THRESHOLD or ( do_exploration and flip_coin(probability) ) )
                 and self.retrieval_count < self.max_retrievals
             ):
                 if new_decision_score.item() >= THRESHOLD:
@@ -983,7 +934,7 @@ class AttentionMixingProbeForCausalLM(
                 # 7.8.2 Retrieve
                 # -------------------------------------------------------------
 
-                retrieval_text = (
+                retrieval_text, retrieval_text_with_query = (
                     self._get_retriever().search(
                         query=retrieval_query,
                         tokenizer=self._get_tokenizer(),
@@ -1011,6 +962,18 @@ class AttentionMixingProbeForCausalLM(
 
                 document_length = (
                     document_input_ids.shape[1]
+                )
+
+                retrieval_text_collect = retrieval_text_with_query if isCritic else retrieval_text
+                
+                document_inputs_collect = self._get_tokenizer()(
+                    retrieval_text_collect,
+                    return_tensors="pt",
+                )
+                            
+                document_input_ids_collect = (
+                    document_inputs_collect["input_ids"]
+                    .to(question_input_ids.device)
                 )
 
                 # -------------------------------------------------------------
@@ -1062,7 +1025,7 @@ class AttentionMixingProbeForCausalLM(
                 input_ids_buffer = torch.cat(
                     [
                         input_ids_buffer,
-                        document_input_ids,
+                        document_input_ids_collect,
                     ],
                     dim=1,
                 )
@@ -1215,7 +1178,7 @@ class AttentionMixingProbeForCausalLM(
     def forward_generate(
         self,
         input_ids: torch.LongTensor | None = None,
-        retrieval_topk: int = DEFAULT_RETRIEVAL_TOPK,
+        retrieval_topk: int = 3,
         max_retrieval_context_tokens: int = MAX_RETRIEVAL_CONTEXT_TOKENS,
 
         # =====================================================================
