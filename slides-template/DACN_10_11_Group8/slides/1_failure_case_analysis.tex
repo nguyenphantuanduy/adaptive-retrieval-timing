@@ -1,0 +1,137 @@
+
+% ============================================================
+% SECTION 5 — FAILURE CASE ANALYSIS
+% ============================================================
+
+\section{Failure Case Analysis}
+
+%------------------------------------------------------------
+% Slide 1 — Demo v2 Performance
+%------------------------------------------------------------
+\begin{frame}{Demo v2: Evaluation Results}
+
+\small
+
+\textbf{Evaluation Results on MuSiQue}
+
+\vspace{0.2cm}
+
+\centering
+\begin{tabular}{lccc}
+    \hline
+    \textbf{Configuration} & \textbf{Acc} & \textbf{F1} & \textbf{EM} \\
+    \hline
+    Without Demo, top-$k=3$ & 18.0 & 25.04 & 16.8 \\
+    Without Demo, top-$k=5$ & \textbf{20.0} & \textbf{26.33} & \textbf{17.6} \\
+    With Demo & 15.2 & 22.73 & 13.2 \\
+    \hline
+\end{tabular}
+
+\vspace{0.3cm}
+
+\begin{block}{Selected Configuration}
+    \small
+    Demo v2 đạt kết quả tốt nhất với cấu hình không sử dụng
+    demonstration và retrieval top-$k=5$.
+\end{block}
+
+\end{frame}
+
+
+%------------------------------------------------------------
+% Slide 2 — Failure Case Example
+%------------------------------------------------------------
+\begin{frame}{Failure Case Example: Demo v2}
+
+\small
+
+\textbf{Question:} What is the birth date of the By Your Side performer?
+
+\vspace{0.1cm}
+
+\textbf{Generated Answer:}
+
+\vspace{0.1cm}
+
+\begin{block}{Model Output}
+    \tiny
+    To determine the birth date of the By Your Side performer,
+    we first need to identify who the performer is. The song
+    ``If You Don't Know Me by Now'' is mentioned in the document,
+    and it is stated that the song was recorded by the Philly soul
+    musical group Harold Melvin \& the Blue Notes. This establishes
+    that the performer in question is Harold Melvin \& the Blue Notes.
+
+    \vspace{0.08cm}
+
+    The document ``If You Don't Know Me by Now'' provides information
+    about the song, including the group that recorded it, which is
+    Harold Melvin \& the Blue Notes. This confirms that the performer
+    is Harold Melvin \& the Blue Notes.
+
+    \vspace{0.08cm}
+
+    The document ``Harold Melvin \& the Blue Notes'' states that
+    the group was formed in 1969. This indicates that the group
+    was active in the 1970s, which aligns with the information
+    provided in the document ``If You Don't Know Me by Now'' about
+    the song being released in 1972.
+
+    \vspace{0.08cm}
+
+    Next, we need to find the birth date of Harold Melvin. The document
+    ``Harold Melvin \& the Blue Notes'' provides information about
+    the group, including that it was formed in 1969. This document
+    also mentions that the group was active in the 1970s, which is
+    consistent with the information in the document ``If You Don't
+    Know Me by Now'' about the song being released in 1972.
+
+    \vspace{0.08cm}
+
+    To find the birth date of Harold Melvin, we look at the document
+    ``Harold Melvin \& the Blue Notes,'' which states that the group
+    was formed in 1969. Since the document states that the group was
+    formed in 1969, we can infer that the group's members were likely
+    formed around that time. The document also mentions that the
+    group was active in the 1970s, which is consistent with the
+    information about the song being released in 1972.
+
+    \vspace{0.08cm}
+
+    To determine the birth date of Harold Melvin, we look at the
+    document ``Harold Melvin \& the Blue Notes,'' which states that
+    the group was formed in 1969. Since the document states that
+    the group was formed in 1969, we can infer that the group's
+    members were likely formed around that time.
+\end{block}
+
+\end{frame}
+
+
+%------------------------------------------------------------
+% Slide 3 — Failure Analysis
+%------------------------------------------------------------
+\begin{frame}{Failure Analysis: Key Findings}
+
+\small
+
+\begin{block}{1. Indirect Query Formulation}
+    Query đôi khi chưa xác định rõ entity hoặc thông tin cần tìm,
+    khiến model truy vấn lệch hướng.
+\end{block}
+
+\vspace{0.15cm}
+
+\begin{block}{2. Insufficient Evidence Handling}
+    Khi evidence không đủ, model vẫn tiếp tục suy luận và đưa ra
+    câu trả lời thiếu căn cứ thay vì nhận diện giới hạn thông tin.
+\end{block}
+
+\vspace{0.2cm}
+
+\textbf{Key Takeaway:}
+
+\textit{Reliable reasoning requires both effective query formulation
+and proper evidence sufficiency assessment.}
+
+\end{frame}

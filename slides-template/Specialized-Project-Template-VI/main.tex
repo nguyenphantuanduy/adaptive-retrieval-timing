@@ -1,0 +1,72 @@
+% =====================================================================
+%  BÁO CÁO ĐỒ ÁN CHUYÊN NGÀNH -- MẪU LaTeX (TIẾNG VIỆT)
+%  Ho Chi Minh City University of Technology (HCMUT) - VNU-HCM
+%  Biên dịch: pdflatex -> bibtex -> pdflatex -> pdflatex
+%  (hoặc: latexmk -pdf main.tex; trên Overleaf chọn trình biên dịch pdfLaTeX)
+% =====================================================================
+\documentclass[vietnamese,final]{hcmut-thesis}
+
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage[nameinlink]{cleveref}   % dùng \Cref{} thay cho \ref{}
+
+% ---------------------------------------------------------------------
+%  Thông tin báo cáo -- CHỈNH SỬA Ở ĐÂY
+% ---------------------------------------------------------------------
+\reporttype{Đồ án chuyên ngành}
+\title{Tên đề tài của bạn}
+\stumajor{Khoa học Máy tính}
+% \deptname{Khoa Khoa học và Kỹ thuật Máy tính}
+% \reporttime{tháng 12/2026}       % mặc định: tháng/năm hiện tại
+% \defcouncil{Hội đồng X}           % không bắt buộc, không đặt thì không hiện trên bìa
+% \reviewer{TS.~Tên giảng viên phản biện}     % không bắt buộc, không đặt thì không hiện trên bìa
+
+\supervisor{
+  PGS.~TS.~Tên giảng viên hướng dẫn
+}
+\stuname{
+  \begin{tabular}{@{}l@{\hspace{1em}}l@{}}
+    Họ tên sinh viên 1 & -- 2xxxxxx \\
+    Họ tên sinh viên 2 & -- 2xxxxxx \\
+    Họ tên sinh viên 3 & -- 2xxxxxx \\
+  \end{tabular}
+}
+
+% Lệnh tự định nghĩa
+% \newcommand*\mean[1]{\bar{#1}}
+
+\begin{document}
+\coverpage%
+
+\frontmatter%
+\include{chapters/front/declaration}
+\include{chapters/front/acknowledgements}
+\include{chapters/front/abstract}
+\include{chapters/front/workload}
+
+\tableofcontents
+\clearpage
+\listoffigures
+\clearpage
+\listoftables
+
+\mainmatter%
+\counterwithin{equation}{chapter}
+\counterwithin{table}{chapter}
+\counterwithin{figure}{chapter}
+
+\include{chapters/main/01-introduction}
+\include{chapters/main/02-background}
+\include{chapters/main/03-methodology}
+\include{chapters/main/04-implementation}
+\include{chapters/main/05-evaluation}
+\include{chapters/main/06-conclusion}
+
+\bibliographystyle{plain}
+\bibliography{refs/references}
+
+\appendix
+\include{chapters/back/appendix-a}
+\include{chapters/back/appendix-b}
+
+\end{document}

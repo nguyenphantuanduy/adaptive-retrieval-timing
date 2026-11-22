@@ -259,31 +259,17 @@ class MuSiQueSampleConverter:
         answer: str,
     ) -> str:
         """
-        Build the complete teacher-oriented reasoning scaffold.
+        Build a concise reasoning instruction containing
+        only the question decomposition steps.
 
-        Each reasoning step contains:
-
+        Each step contains:
             - sub-question
             - intermediate answer
-            - exact supporting document title
+            - supporting document title
 
-        The final answer is also explicitly provided.
-
-        Paragraph indices are intentionally excluded because
-        they are internal dataset metadata and are not useful
-        for teacher reasoning generation.
-
-        The resulting instruction is designed to replace the
-        separate question_decomposition section in the teacher
-        prompt.
+        No introductory or concluding instructions are included.
+        Paragraph indices remain internal metadata.
         """
-
-        # ----------------------------------------------------
-        # Build paragraph-index -> document map.
-        #
-        # This mapping is used internally to resolve the exact
-        # supporting document title.
-        # ----------------------------------------------------
 
         document_map = {
             document.paragraph_idx: document
@@ -292,110 +278,36 @@ class MuSiQueSampleConverter:
 
         lines = []
 
-        # ----------------------------------------------------
-        # Introduction.
-        # ----------------------------------------------------
+        for step in decomposition:
 
-        lines.append(
-            "Use the following reasoning structure to solve "
-            "the main question."
-        )
-
-        lines.append(
-            "The information below is provided as teacher "
-            "supervision."
-        )
-
-        lines.append(
-            "Reconstruct a natural reasoning process from it "
-            "rather than copying it verbatim."
-        )
-
-        lines.append("")
-
-        lines.append(
-            f"Main question: {question}"
-        )
-
-        lines.append("")
-
-        # ----------------------------------------------------
-        # Reasoning steps.
-        # ----------------------------------------------------
-
-        if decomposition:
-
-            lines.append(
-                "Reasoning steps:"
+            supporting_document = document_map.get(
+                step.paragraph_support_idx
             )
 
-            lines.append("")
+            document_title = (
+                supporting_document.title
+                if supporting_document is not None
+                else "UNKNOWN DOCUMENT"
+            )
 
-            for step in decomposition:
+            lines.append(
+                f"Step {step.step_id}:"
+            )
 
-                # --------------------------------------------
-                # Resolve supporting document.
-                # --------------------------------------------
+            lines.append(
+                f"- Question: {step.question}"
+            )
 
-                supporting_document = (
-                    document_map.get(
-                        step.paragraph_support_idx
-                    )
-                )
+            lines.append(
+                f"- Answer: {step.answer}"
+            )
 
-                if supporting_document is not None:
+            lines.append(
+                f"- Supporting document: {document_title}"
+            )
 
-                    document_title = (
-                        supporting_document.title
-                    )
-
-                else:
-
-                    document_title = (
-                        "UNKNOWN DOCUMENT"
-                    )
-
-                # --------------------------------------------
-                # Step.
-                # --------------------------------------------
-
-                lines.append(
-                    f"Step {step.step_id}:"
-                )
-
-                lines.append(
-                    f"  Sub-question: "
-                    f"{step.question}"
-                )
-
-                lines.append(
-                    f"  Intermediate answer: "
-                    f"{step.answer}"
-                )
-
-                lines.append(
-                    f"  Supporting document: "
-                    f"{document_title}"
-                )
-
+            if step != decomposition[-1]:
                 lines.append("")
-
-        else:
-
-            lines.append(
-                "No explicit question decomposition "
-                "is available."
-            )
-
-            lines.append("")
-
-        # ----------------------------------------------------
-        # Final answer.
-        # ----------------------------------------------------
-
-        lines.append(
-            f"Final answer: {answer}"
-        )
 
         return "\n".join(lines)
 

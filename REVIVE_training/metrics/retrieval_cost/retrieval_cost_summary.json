@@ -1,0 +1,534 @@
+{
+  "count_method": "Length of pure_art_queries in completed prediction rows, including repeats.",
+  "count_provenance": "Logged search-call proxy. Local generation appends immediately before search; no per-call success or failure status, and historical remote code revisions are unpinned.",
+  "percentile_method": "Linear interpolation at (n - 1) * percentile_fraction.",
+  "configurations": [
+    {
+      "dataset": "2wikimultihopqa",
+      "threshold": 0.4297,
+      "source_filename": "art-backup/demo-3/result/2wikimultihopqa/rsearch_2wikimultihopqa_art_top5_results.jsonl",
+      "metric_filename": "art-backup/demo-3/metrics/2wikimultihopqa/rsearch_2wikimultihopqa_art_top5_metrics.json",
+      "metrics": {
+        "Acc": 48.2,
+        "F1": 46.3,
+        "EM": 37.0
+      },
+      "sample_count": 500,
+      "total_queries": 2006,
+      "average_queries": 4.012,
+      "median_queries": 4.0,
+      "population_stddev": 1.3666952842532236,
+      "min_queries": 1,
+      "max_queries": 10,
+      "p90_queries": 6.0,
+      "p95_queries": 6.0,
+      "zero_retrieval_samples": 0,
+      "zero_retrieval_percent": 0.0,
+      "retrieval_samples": 500,
+      "retrieval_rate_percent": 100.0,
+      "distribution": {
+        "0": 0,
+        "1": 2,
+        "2": 38,
+        "3": 179,
+        "4": 117,
+        "5": 98,
+        "6": 42,
+        "7": 16,
+        "8": 4,
+        "9": 3,
+        "10": 1
+      },
+      "diagnostics": {
+        "ordered_identity_sha256": "b6a6415f561c339711f5c789f2207cfe97704a6c8f3ae5b8729cef1758a1dba1",
+        "samples_with_repeated_queries": 20,
+        "samples_with_more_queries_than_scores": 0,
+        "passages_per_query_ratio_distribution": {
+          "5.0": 500
+        },
+        "zero_query_samples_with_passages": 0
+      },
+      "pareto_efficient_within_dataset": true,
+      "pareto_efficient_within_threshold_sweep": true
+    },
+    {
+      "dataset": "2wikimultihopqa",
+      "threshold": 0.5,
+      "source_filename": "art-backup/demo-3/result/2wikimultihopqa/threshold50.jsonl",
+      "metric_filename": "art-backup/demo-3/metrics/2wikimultihopqa/threshold50_metrics.json",
+      "metrics": {
+        "Acc": 46.4,
+        "F1": 44.75,
+        "EM": 35.6
+      },
+      "sample_count": 500,
+      "total_queries": 1465,
+      "average_queries": 2.93,
+      "median_queries": 3.0,
+      "population_stddev": 1.083097410208334,
+      "min_queries": 1,
+      "max_queries": 9,
+      "p90_queries": 4.0,
+      "p95_queries": 5.0,
+      "zero_retrieval_samples": 0,
+      "zero_retrieval_percent": 0.0,
+      "retrieval_samples": 500,
+      "retrieval_rate_percent": 100.0,
+      "distribution": {
+        "0": 0,
+        "1": 12,
+        "2": 188,
+        "3": 184,
+        "4": 74,
+        "5": 28,
+        "6": 11,
+        "7": 2,
+        "8": 0,
+        "9": 1
+      },
+      "diagnostics": {
+        "ordered_identity_sha256": "b6a6415f561c339711f5c789f2207cfe97704a6c8f3ae5b8729cef1758a1dba1",
+        "samples_with_repeated_queries": 1,
+        "samples_with_more_queries_than_scores": 0,
+        "passages_per_query_ratio_distribution": {
+          "5.0": 500
+        },
+        "zero_query_samples_with_passages": 0
+      },
+      "pareto_efficient_within_dataset": true,
+      "pareto_efficient_within_threshold_sweep": true
+    },
+    {
+      "dataset": "2wikimultihopqa",
+      "threshold": 0.6,
+      "source_filename": "art-backup/demo-3/result/2wikimultihopqa/threshold60.jsonl",
+      "metric_filename": "art-backup/demo-3/metrics/2wikimultihopqa/threshold60_metrics.json",
+      "metrics": {
+        "Acc": 44.4,
+        "F1": 44.34,
+        "EM": 36.0
+      },
+      "sample_count": 500,
+      "total_queries": 1063,
+      "average_queries": 2.126,
+      "median_queries": 2.0,
+      "population_stddev": 0.673887230922207,
+      "min_queries": 0,
+      "max_queries": 5,
+      "p90_queries": 3.0,
+      "p95_queries": 3.0,
+      "zero_retrieval_samples": 3,
+      "zero_retrieval_percent": 0.6,
+      "retrieval_samples": 497,
+      "retrieval_rate_percent": 99.4,
+      "distribution": {
+        "0": 3,
+        "1": 56,
+        "2": 336,
+        "3": 86,
+        "4": 18,
+        "5": 1
+      },
+      "diagnostics": {
+        "ordered_identity_sha256": "b6a6415f561c339711f5c789f2207cfe97704a6c8f3ae5b8729cef1758a1dba1",
+        "samples_with_repeated_queries": 0,
+        "samples_with_more_queries_than_scores": 0,
+        "passages_per_query_ratio_distribution": {
+          "5.0": 497
+        },
+        "zero_query_samples_with_passages": 0
+      },
+      "pareto_efficient_within_dataset": true,
+      "pareto_efficient_within_threshold_sweep": true
+    },
+    {
+      "dataset": "hotpotqa",
+      "threshold": 0.4297,
+      "source_filename": "art-backup/demo-3/result/hotpotqa/rsearch_hotpotqa_art_top5_results.jsonl",
+      "metric_filename": "art-backup/demo-3/metrics/hotpotqa/rsearch_hotpotqa_art_top5_metrics.json",
+      "metrics": {
+        "Acc": 42.2,
+        "F1": 48.24,
+        "EM": 37.2
+      },
+      "sample_count": 500,
+      "total_queries": 2035,
+      "average_queries": 4.07,
+      "median_queries": 4.0,
+      "population_stddev": 1.3932336487466845,
+      "min_queries": 2,
+      "max_queries": 13,
+      "p90_queries": 6.0,
+      "p95_queries": 6.0,
+      "zero_retrieval_samples": 0,
+      "zero_retrieval_percent": 0.0,
+      "retrieval_samples": 500,
+      "retrieval_rate_percent": 100.0,
+      "distribution": {
+        "0": 0,
+        "1": 0,
+        "2": 27,
+        "3": 172,
+        "4": 150,
+        "5": 89,
+        "6": 41,
+        "7": 8,
+        "8": 8,
+        "9": 1,
+        "10": 1,
+        "11": 2,
+        "12": 0,
+        "13": 1
+      },
+      "diagnostics": {
+        "ordered_identity_sha256": "4e10a8a2c1360ea396ac45d2a07feccf7940862e13c9a652d3ba9cffe3286781",
+        "samples_with_repeated_queries": 13,
+        "samples_with_more_queries_than_scores": 0,
+        "passages_per_query_ratio_distribution": {
+          "5.0": 500
+        },
+        "zero_query_samples_with_passages": 0
+      },
+      "pareto_efficient_within_dataset": false,
+      "pareto_efficient_within_threshold_sweep": false
+    },
+    {
+      "dataset": "hotpotqa",
+      "threshold": 0.5,
+      "source_filename": "art-backup/demo-3/result/hotpotqa/threshold50.jsonl",
+      "metric_filename": "art-backup/demo-3/metrics/hotpotqa/threshold50_metrics.json",
+      "metrics": {
+        "Acc": 43.8,
+        "F1": 49.68,
+        "EM": 39.2
+      },
+      "sample_count": 500,
+      "total_queries": 1583,
+      "average_queries": 3.166,
+      "median_queries": 3.0,
+      "population_stddev": 0.958354840338379,
+      "min_queries": 0,
+      "max_queries": 8,
+      "p90_queries": 4.0,
+      "p95_queries": 5.0,
+      "zero_retrieval_samples": 1,
+      "zero_retrieval_percent": 0.2,
+      "retrieval_samples": 499,
+      "retrieval_rate_percent": 99.8,
+      "distribution": {
+        "0": 1,
+        "1": 4,
+        "2": 109,
+        "3": 236,
+        "4": 108,
+        "5": 34,
+        "6": 6,
+        "7": 1,
+        "8": 1
+      },
+      "diagnostics": {
+        "ordered_identity_sha256": "4e10a8a2c1360ea396ac45d2a07feccf7940862e13c9a652d3ba9cffe3286781",
+        "samples_with_repeated_queries": 10,
+        "samples_with_more_queries_than_scores": 0,
+        "passages_per_query_ratio_distribution": {
+          "5.0": 499
+        },
+        "zero_query_samples_with_passages": 0
+      },
+      "pareto_efficient_within_dataset": true,
+      "pareto_efficient_within_threshold_sweep": true
+    },
+    {
+      "dataset": "hotpotqa",
+      "threshold": 0.6,
+      "source_filename": "art-backup/demo-3/result/hotpotqa/threshold60.jsonl",
+      "metric_filename": "art-backup/demo-3/metrics/hotpotqa/threshold60_metrics.json",
+      "metrics": {
+        "Acc": 40.0,
+        "F1": 46.87,
+        "EM": 36.4
+      },
+      "sample_count": 500,
+      "total_queries": 1139,
+      "average_queries": 2.278,
+      "median_queries": 2.0,
+      "population_stddev": 0.6875434531722341,
+      "min_queries": 0,
+      "max_queries": 8,
+      "p90_queries": 3.0,
+      "p95_queries": 3.0,
+      "zero_retrieval_samples": 4,
+      "zero_retrieval_percent": 0.8,
+      "retrieval_samples": 496,
+      "retrieval_rate_percent": 99.2,
+      "distribution": {
+        "0": 4,
+        "1": 26,
+        "2": 316,
+        "3": 140,
+        "4": 12,
+        "5": 1,
+        "6": 0,
+        "7": 0,
+        "8": 1
+      },
+      "diagnostics": {
+        "ordered_identity_sha256": "4e10a8a2c1360ea396ac45d2a07feccf7940862e13c9a652d3ba9cffe3286781",
+        "samples_with_repeated_queries": 1,
+        "samples_with_more_queries_than_scores": 0,
+        "passages_per_query_ratio_distribution": {
+          "5.0": 496
+        },
+        "zero_query_samples_with_passages": 0
+      },
+      "pareto_efficient_within_dataset": true,
+      "pareto_efficient_within_threshold_sweep": true
+    },
+    {
+      "dataset": "musique",
+      "threshold": 0.4297,
+      "source_filename": "art-backup/demo-3/result/musique/rsearch_musique_art_top5_results.jsonl",
+      "metric_filename": "art-backup/demo-3/metrics/musique/rsearch_musique_art_top5_metrics.json",
+      "metrics": {
+        "Acc": 25.8,
+        "F1": 31.17,
+        "EM": 21.6
+      },
+      "sample_count": 500,
+      "total_queries": 2396,
+      "average_queries": 4.792,
+      "median_queries": 5.0,
+      "population_stddev": 1.6530989081116714,
+      "min_queries": 1,
+      "max_queries": 11,
+      "p90_queries": 7.0,
+      "p95_queries": 8.0,
+      "zero_retrieval_samples": 0,
+      "zero_retrieval_percent": 0.0,
+      "retrieval_samples": 500,
+      "retrieval_rate_percent": 100.0,
+      "distribution": {
+        "0": 0,
+        "1": 1,
+        "2": 23,
+        "3": 110,
+        "4": 85,
+        "5": 121,
+        "6": 90,
+        "7": 44,
+        "8": 14,
+        "9": 7,
+        "10": 4,
+        "11": 1
+      },
+      "diagnostics": {
+        "ordered_identity_sha256": "bc3f5b9cc95da952c1dd69584a5fbbfb73e7eb44435ea7b37d8568b6346249dc",
+        "samples_with_repeated_queries": 18,
+        "samples_with_more_queries_than_scores": 0,
+        "passages_per_query_ratio_distribution": {
+          "5.0": 500
+        },
+        "zero_query_samples_with_passages": 0
+      },
+      "pareto_efficient_within_dataset": false,
+      "pareto_efficient_within_threshold_sweep": false
+    },
+    {
+      "dataset": "musique",
+      "threshold": 0.5,
+      "source_filename": "art-backup/demo-3/result/musique/threshold50.jsonl",
+      "metric_filename": "art-backup/demo-3/metrics/musique/threshold50_metrics.json",
+      "metrics": {
+        "Acc": 24.0,
+        "F1": 30.27,
+        "EM": 20.8
+      },
+      "sample_count": 500,
+      "total_queries": 1797,
+      "average_queries": 3.594,
+      "median_queries": 3.0,
+      "population_stddev": 1.345051671869895,
+      "min_queries": 1,
+      "max_queries": 9,
+      "p90_queries": 5.0,
+      "p95_queries": 6.0,
+      "zero_retrieval_samples": 0,
+      "zero_retrieval_percent": 0.0,
+      "retrieval_samples": 500,
+      "retrieval_rate_percent": 100.0,
+      "distribution": {
+        "0": 0,
+        "1": 4,
+        "2": 109,
+        "3": 153,
+        "4": 114,
+        "5": 80,
+        "6": 28,
+        "7": 7,
+        "8": 2,
+        "9": 3
+      },
+      "diagnostics": {
+        "ordered_identity_sha256": "bc3f5b9cc95da952c1dd69584a5fbbfb73e7eb44435ea7b37d8568b6346249dc",
+        "samples_with_repeated_queries": 7,
+        "samples_with_more_queries_than_scores": 0,
+        "passages_per_query_ratio_distribution": {
+          "5.0": 500
+        },
+        "zero_query_samples_with_passages": 0
+      },
+      "pareto_efficient_within_dataset": false,
+      "pareto_efficient_within_threshold_sweep": false
+    },
+    {
+      "dataset": "musique",
+      "threshold": 0.6,
+      "source_filename": "art-backup/demo-3/result/musique/threshold60.jsonl",
+      "metric_filename": "art-backup/demo-3/metrics/musique/threshold60_metrics.json",
+      "metrics": {
+        "Acc": 26.0,
+        "F1": 32.08,
+        "EM": 22.8
+      },
+      "sample_count": 500,
+      "total_queries": 1294,
+      "average_queries": 2.588,
+      "median_queries": 2.0,
+      "population_stddev": 0.9350165773931498,
+      "min_queries": 1,
+      "max_queries": 7,
+      "p90_queries": 4.0,
+      "p95_queries": 4.0,
+      "zero_retrieval_samples": 0,
+      "zero_retrieval_percent": 0.0,
+      "retrieval_samples": 500,
+      "retrieval_rate_percent": 100.0,
+      "distribution": {
+        "0": 0,
+        "1": 20,
+        "2": 268,
+        "3": 136,
+        "4": 58,
+        "5": 12,
+        "6": 4,
+        "7": 2
+      },
+      "diagnostics": {
+        "ordered_identity_sha256": "bc3f5b9cc95da952c1dd69584a5fbbfb73e7eb44435ea7b37d8568b6346249dc",
+        "samples_with_repeated_queries": 3,
+        "samples_with_more_queries_than_scores": 0,
+        "passages_per_query_ratio_distribution": {
+          "5.0": 500
+        },
+        "zero_query_samples_with_passages": 0
+      },
+      "pareto_efficient_within_dataset": true,
+      "pareto_efficient_within_threshold_sweep": true
+    },
+    {
+      "dataset": "musique",
+      "threshold": 0.7,
+      "source_filename": "art-backup/demo-3/result/musique/threshold70.jsonl",
+      "metric_filename": "art-backup/demo-3/metrics/musique/threshold70_metrics.json",
+      "metrics": {
+        "Acc": 22.6,
+        "F1": 29.21,
+        "EM": 19.8
+      },
+      "sample_count": 500,
+      "total_queries": 1063,
+      "average_queries": 2.126,
+      "median_queries": 2.0,
+      "population_stddev": 0.7000885658257818,
+      "min_queries": 0,
+      "max_queries": 5,
+      "p90_queries": 3.0,
+      "p95_queries": 3.0,
+      "zero_retrieval_samples": 4,
+      "zero_retrieval_percent": 0.8,
+      "retrieval_samples": 496,
+      "retrieval_rate_percent": 99.2,
+      "distribution": {
+        "0": 4,
+        "1": 63,
+        "2": 317,
+        "3": 100,
+        "4": 14,
+        "5": 2
+      },
+      "diagnostics": {
+        "ordered_identity_sha256": "bc3f5b9cc95da952c1dd69584a5fbbfb73e7eb44435ea7b37d8568b6346249dc",
+        "samples_with_repeated_queries": 3,
+        "samples_with_more_queries_than_scores": 0,
+        "passages_per_query_ratio_distribution": {
+          "5.0": 496
+        },
+        "zero_query_samples_with_passages": 0
+      },
+      "pareto_efficient_within_dataset": true,
+      "pareto_efficient_within_threshold_sweep": true
+    },
+    {
+      "dataset": "musique",
+      "threshold": null,
+      "source_filename": "art-backup/demo-3/result/musique/rsearch_musique_art_results.jsonl",
+      "metric_filename": "art-backup/demo-3/metrics/musique/rsearch_musique_art_metrics.json",
+      "metrics": {
+        "Acc": 22.8,
+        "F1": 28.46,
+        "EM": 19.6
+      },
+      "sample_count": 500,
+      "total_queries": 2219,
+      "average_queries": 4.438,
+      "median_queries": 4.0,
+      "population_stddev": 1.5906464094826354,
+      "min_queries": 1,
+      "max_queries": 18,
+      "p90_queries": 6.0,
+      "p95_queries": 7.0,
+      "zero_retrieval_samples": 0,
+      "zero_retrieval_percent": 0.0,
+      "retrieval_samples": 500,
+      "retrieval_rate_percent": 100.0,
+      "distribution": {
+        "0": 0,
+        "1": 2,
+        "2": 15,
+        "3": 144,
+        "4": 123,
+        "5": 117,
+        "6": 51,
+        "7": 30,
+        "8": 12,
+        "9": 3,
+        "10": 1,
+        "11": 1,
+        "12": 0,
+        "13": 0,
+        "14": 0,
+        "15": 0,
+        "16": 0,
+        "17": 0,
+        "18": 1
+      },
+      "diagnostics": {
+        "ordered_identity_sha256": "bc3f5b9cc95da952c1dd69584a5fbbfb73e7eb44435ea7b37d8568b6346249dc",
+        "samples_with_repeated_queries": 10,
+        "samples_with_more_queries_than_scores": 0,
+        "passages_per_query_ratio_distribution": {
+          "3.0": 500
+        },
+        "zero_query_samples_with_passages": 0
+      },
+      "pareto_efficient_within_dataset": false,
+      "pareto_efficient_within_threshold_sweep": null
+    }
+  ],
+  "issues": [
+    {
+      "source_filename": "art-backup/demo-3/result/musique/rsearch_musique_art_results.jsonl",
+      "reason": "threshold unverified; excluded from threshold sweep"
+    }
+  ]
+}

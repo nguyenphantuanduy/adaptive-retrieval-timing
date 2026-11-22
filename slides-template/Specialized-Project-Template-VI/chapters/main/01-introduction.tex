@@ -1,0 +1,61 @@
+\chapter{Giới thiệu}
+\label{chap:introduction}
+
+\noindent
+\textit{[Không bắt buộc: một đoạn in nghiêng ngắn tóm tắt nội dung của chương.]}
+
+\section{Lý do chọn đề tài}
+% Bối cảnh của vấn đề và tầm quan trọng.
+
+\section{Phát biểu bài toán}
+% Bài toán cụ thể mà đồ án giải quyết.
+
+\section{Mục tiêu}
+% Những mục tiêu đồ án hướng tới, ví dụ:
+\begin{itemize}
+  \item Mục tiêu 1.
+  \item Mục tiêu 2.
+\end{itemize}
+
+\section{Phạm vi}
+% Những gì thuộc và không thuộc phạm vi đồ án.
+
+\section{Đóng góp}
+% Các đóng góp chính của đồ án.
+
+\section{Cấu trúc báo cáo}
+% Mô tả ngắn gọn các chương còn lại.
+Phần còn lại của báo cáo được tổ chức như sau. \Cref{chap:background} \ldots
+
+% ---------------------------------------------------------------------
+%  VÍ DỤ ĐỊNH DẠNG -- xóa mục này khi viết báo cáo
+% ---------------------------------------------------------------------
+\section{Ví dụ định dạng (xóa mục này)}
+Trích dẫn tài liệu như sau~\cite{latex2e}, hoặc nhiều tài liệu cùng lúc~\cite{texbook,latex:companion}.
+Tham chiếu \Cref{fig:example}, \Cref{tab:example} và \Cref{eq:example}.
+
+\begin{equation}
+  \label{eq:example}
+  \hat{\theta} = \arg\min_{\theta} \frac{1}{N} \sum_{i=1}^{N} \ell\big(f_\theta(x_i), y_i\big)
+\end{equation}
+
+\begin{figure}[htbp]
+  \centering
+  \includegraphics[width=0.25\textwidth]{graphics/hcmut.png}
+  \caption{Hình ví dụ. Đặt hình ảnh trong thư mục \texttt{graphics/}.}
+  \label{fig:example}
+\end{figure}
+
+\begin{table}[htbp]
+  \centering
+  \caption{Bảng ví dụ (kiểu booktabs).}
+  \label{tab:example}
+  \begin{tabular}{lccc}
+    \toprule
+    \textbf{Mô hình} & \textbf{MAE} $\downarrow$ & \textbf{RMSE} $\downarrow$ & $R^2$ $\uparrow$ \\
+    \midrule
+    Mô hình cơ sở & 0.00 & 0.00 & 0.00 \\
+    Đề xuất & \textbf{0.00} & \textbf{0.00} & \textbf{0.00} \\
+    \bottomrule
+  \end{tabular}
+\end{table}

@@ -1,0 +1,47 @@
+% Slide 1 — Threshold Selection
+
+% ============================================================
+% ANALYSIS RESULTS — THRESHOLD SELECTION
+% ============================================================
+
+\section{Analysis Results}
+
+\begin{frame}{Analysis Results: Threshold Selection}
+
+\begin{columns}[T,onlytextwidth]
+
+    \column{0.55\textwidth}
+    \centering
+    \includegraphics[width=\textwidth,height=0.68\textheight,keepaspectratio]{images/gradient_vs_decision_score_total_with_threshold.png}
+
+    \column{0.45\textwidth}
+    \centering
+    \scriptsize
+    \begin{tabular}{c r r r}
+        \hline
+        \textbf{Ratio} & \textbf{Score} & \textbf{Mean Grad.} & \textbf{N} \\
+        \hline
+        0:3 & 0.3750 & 0.401607 & 1024 \\
+        1:2 & 0.4375 & -1.235579 & 1024 \\
+        2:1 & 0.4375 & -2.123264 & 1024 \\
+        3:0 & 0.4375 & -2.478448 & 494 \\
+        \hline
+    \end{tabular}
+
+\end{columns}
+
+\end{frame}
+
+% Slide 2 — Retrieval Cost
+
+% ============================================================
+% ANALYSIS RESULTS — RETRIEVAL COST
+% ============================================================
+
+\begin{frame}{Analysis Results: Retrieval Cost}
+
+\centering
+
+\includegraphics[width=\textwidth,height=0.82\textheight,keepaspectratio]{images/gradient_vs_decision_score_total_with_threshold_and_costs.png}
+
+\end{frame}

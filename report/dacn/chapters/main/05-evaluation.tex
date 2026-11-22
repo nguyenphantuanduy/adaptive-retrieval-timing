@@ -1,0 +1,59 @@
+\chapter{Thực nghiệm và đánh giá}
+\label{chap:evaluation}
+\section{Thiết lập thực nghiệm}
+\subsection{Hai phép thăm dò cơ chế}
+Hai phép thăm dò dùng Attention Mixing Probe, một Decoder Qwen2.5 nhận document mask và hệ số trộn trực tiếp. Tài liệu cấp sẵn tách phép đo chú ý khỏi Decision Head và vòng truy hồi tự hồi quy. Dữ liệu thăm dò đến từ các tập xác thực 2, 3 và 4 bước của MuSiQue. Tiêu chí hỗ trợ dựa trên nhãn đoạn của bộ dữ liệu. Nhóm đoạn được lấy mẫu một lần theo câu hỏi với bộ sinh số ngẫu nhiên seed 42. H1 dùng chế độ suy luận để tính mất mát trên token đích. H2 dùng hook trên hệ số đầu vào để ghi gradient, với tốc độ học bằng không và tham số mô hình đóng băng. Các phép thăm dò sử dụng cùng lưới 33 mức \(d=i/32\). Các tỷ lệ 0:3, 1:2, 2:1 và 3:0 chỉ số đoạn hỗ trợ và gây nhiễu, mỗi nhóm gồm ba đoạn. Các đường tổng hợp gộp theo mẫu; nhóm 3:0 có 494 mẫu, các nhóm còn lại có 1\,024 mẫu. Điều kiện 2 bước, 3:0 thiếu vì không đủ đoạn hỗ trợ. So sánh giữa các điều kiện phải xét thành phần mẫu và thông tin cung cấp sẵn.
+\subsection{Đối chứng hệ thống}
+Mỗi bộ có 500 mẫu. Bản ghi ba hệ thống khớp theo thứ tự ID, câu hỏi và toàn bộ đáp án chấp nhận. No-RAG sinh từ câu hỏi; Vanilla RAG truy hồi một lần bằng câu hỏi, giữ năm đoạn; ART truy vấn trong khi sinh và lấy năm đoạn mỗi lượt ở cấu hình mặc định. Mã thiết lập seed 44 và cùng họ Qwen2.5-3B-Instruct. Hai đối chứng dùng checkpoint gốc, ART dùng bản tinh chỉnh. Đối chiếu kết quả truy hồi cho các truy vấn trùng nhau cho thấy năm tiêu đề đầu cùng thứ tự trên cả ba bộ; phiên bản chỉ mục lịch sử chưa được ghim.
+Hai baseline dùng prompt tương ứng theo mẫu R-Search; ART dùng prompt riêng. Trình chấm đối chứng loại token điều khiển rồi chấm phần sinh. ART lấy khối trả lời hoàn chỉnh cuối cùng hoặc dùng nguyên phần sinh đã tỉa khoảng trắng khi không có khối. Ba hàm chấm địa phương dùng cùng quy tắc so khớp với mã evaluator R-Search. Bài báo R-Search nêu EM và F1 là chỉ số QA chính\cite{rsearch}. Acc đo tỷ lệ mẫu có ít nhất một ground-truth alias xuất hiện dưới dạng chuỗi con, không phân biệt hoa thường. EM lấy khớp chính xác tốt nhất sau chuẩn hóa; F1 lấy F1 token đa tập tốt nhất theo các đáp án chấp nhận. Chuẩn hóa chuyển chữ thường, bỏ dấu câu ASCII và mạo từ tiếng Anh, rồi gộp khoảng trắng. Kết quả là trung bình mẫu trên thang phần trăm.
+\section{Kết quả}
+\subsection{Kiểm chứng H1 và H2}
+\textbf{H1.} Thay đổi Attention Mixing làm thay đổi LM Loss theo thành phần bằng chứng. Kết quả cho thấy ở hai đầu lưới, mất mát nhóm 3:0 giảm từ \(1.2875\) xuống \(0.8940\), còn nhóm 0:3 tăng từ \(1.3160\) lên \(1.3943\). \Cref{fig:h1} cho thấy các cực tiểu bên trong và xu hướng khác nhau giữa tỷ lệ. Kết quả ủng hộ ảnh hưởng của bằng chứng đối với xác suất đích; phép đo không trực tiếp phản ánh chất lượng sinh tự do.
+\begin{figure}[htbp]\centering
+\includegraphics[width=.86\linewidth]{graphics/h1.pdf}
+\caption{H1: mất mát trung bình trên đích theo hệ số trộn ép và tỷ lệ hỗ trợ:gây nhiễu. Nguồn: tổng hợp H1 của đề tài.}
+\label{fig:h1}
+\end{figure}
+
+\textbf{H2.} Gradient theo mixing coefficient có thể cung cấp hướng học cục bộ. Kết quả cho thấy đường toàn đoạn gây nhiễu có đỉnh dương ở \(d=0.375\), còn ba điều kiện có hỗ trợ có đáy âm ở \(d=0.4375\). Hai đặc trưng này gợi ý xem xét khoảng \(d=0.40\)--\(0.44\). Đường toàn nhiễu cũng đổi dấu trong lân cận này, và tại \(d=1\) cả bốn gradient đều dương. Do đó tín hiệu cục bộ phụ thuộc hệ số và thành phần bằng chứng. \Cref{fig:h2,fig:h2cost} lấy từ notebook H2 giản lược. Mặt cắt chi phí xét \(g(d)+\lambda\) bằng cách đặt đường ngang tại \(-\lambda\), với \(\lambda=0,0.05,0.1\). Giao điểm minh họa cách độ dốc đổi dấu trên miền quan sát phía trên ngưỡng; chúng không phải kết quả tìm ngưỡng tối ưu. ART chọn \(\tau=0.4297\) làm ngưỡng vận hành theo kinh nghiệm. \(d\) trên hình là hệ số ép của thí nghiệm, còn \(\tau\) so với \(s_t\) trong sinh tự do.
+\begin{figure}[htbp]\centering
+\includegraphics[width=.86\linewidth]{graphics/h2-gradient.pdf}
+\caption{H2: gradient mất mát trung bình theo \(d\). Vạch đứng chỉ ngưỡng vận hành \(\tau\) để tham chiếu. Nguồn: notebook H2, ô vẽ đường gradient.}
+\label{fig:h2}
+\end{figure}
+\begin{figure}[htbp]\centering
+\includegraphics[width=\linewidth]{graphics/h2-cost.pdf}
+\caption{H2: đối chiếu gradient với các mức \(-\lambda\). Nguồn: ô phân tích chi phí trong cùng notebook.}
+\label{fig:h2cost}
+\end{figure}
+\clearpage
+\subsection{Chất lượng hỏi đáp và tải truy hồi}
+\input{graphics/local-table.tex}
+\Cref{tab:local} cho thấy ART ở ngưỡng mặc định cải thiện cả ba chỉ số trên cả ba bộ. So với Vanilla RAG, F1 tăng \(20.92\), \(8.63\), \(8.49\) điểm phần trăm theo thứ tự MuSiQue, HotpotQA, 2WikiMultiHopQA. So với No-RAG, mức tăng tương ứng là \(25.56\), \(28.05\), \(18.72\). Đây là kết quả của hệ thống hoàn chỉnh chứa cả quá trình tinh chỉnh và chính sách truy hồi.
+\Cref{tab:sweep,fig:tradeoff} tóm tắt các cấu hình có ngưỡng xác định.
+\input{graphics/sweep-table.tex}
+
+Retrieval count là độ dài danh sách truy vấn trên từng mẫu đã hoàn tất, giữ cả truy vấn lặp. Mã ghi truy vấn ngay trước lời gọi tìm kiếm; log thiếu trạng thái thành công từng lần. Đại lượng này phản ánh hành vi retrieval. Tổng compute còn phụ thuộc vào embedding, tìm kiếm, độ dài ngữ cảnh và generation. Trong các lần chạy đã lưu, ngưỡng cao hơn luôn giảm số truy vấn trung bình. F1 không giảm đều: MuSiQue ở \(0.60\) tăng \(0.91\) điểm và giảm \(2.204\) truy vấn/mẫu, còn HotpotQA ở \(0.50\) tăng \(1.44\) điểm và giảm \(0.904\) truy vấn/mẫu. Trên 2WikiMultiHopQA, hai ngưỡng cao hơn đều giảm F1 so với mặc định.
+F1 cao nhất quan sát được là 32.08 tại \(0.60\) (MuSiQue), 49.68 tại \(0.50\) (HotpotQA) và 46.30 tại \(0.4297\) (2WikiMultiHopQA). Các ngưỡng được nhận diện trên chính dữ liệu kiểm thử và chỉ dùng cho sensitivity analysis. So sánh chính dùng chung \(\tau=0.4297\).
+
+Cấu hình không bị trội khi không có cấu hình nào khác vừa đạt F1 cao hơn hoặc bằng vừa dùng ít truy vấn hơn hoặc bằng, với ít nhất một bất đẳng thức nghiêm. Biên quan sát gồm MuSiQue \(0.60,0.70\), HotpotQA \(0.50,0.60\), và ba điểm 2WikiMultiHopQA. Kết quả này mô tả riêng lưới đã thử.
+\begin{figure}[htbp]\centering
+\includegraphics[width=\linewidth]{graphics/tradeoff.pdf}
+\caption{F1 và số truy vấn trung bình trên các cấu hình có ngưỡng xác định. Vòng tròn rỗng đánh dấu các điểm không bị trội trong từng bộ.}
+\label{fig:tradeoff}
+\end{figure}
+\clearpage
+\section{Thảo luận}
+\subsection{Ví dụ đối sánh trên MuSiQue}
+Dùng lại MuSiQue ID 27 từ \cref{fig:baseline-case}. Dưới đây là câu hỏi, ground truth và toàn bộ raw outputs. Dấu điều khiển được giữ nguyên trong trích dẫn.
+
+\begin{quote}\SingleSpacing
+\input{graphics/case-outputs.tex}
+\end{quote}
+
+Hai đối chứng có EM bằng 0; ART có EM bằng 1 sau khi lấy nội dung thẻ trả lời. Lượt đầu của ART chứa đoạn xác định Bindi Irwin là diễn viên đóng Nim. Lượt hai dùng tên Bindi Irwin trong truy vấn và trả đoạn xác nhận cha cô là Steve Irwin. Raw output viện dẫn \emph{My Steve}, nhưng bản đoạn đã lưu không nêu quan hệ cha--con; bằng chứng trực tiếp nằm trong các đoạn khác cùng lượt. Phụ lục~\ref{app:examples} ghi nguyên văn trace và đoạn trích. Mẫu minh họa cách truy vấn thay đổi khi có thực thể trung gian.
+
+\subsection{So sánh cơ chế}
+Trong \cref{tab:signals}, IRCoT tạo cơ hội truy hồi theo bước suy luận, Self-RAG học reflection token từ tín hiệu giám sát và R-Search dùng reward để tối ưu quỹ đạo tìm kiếm. ART đưa retrieval regularization vào mục tiêu cùng LM Loss và nhận gradient gián tiếp qua Attention Mixing trên quỹ đạo đã thu thập. Thiết kế này tránh thu thập nhãn trực tiếp cho từng quyết định và tránh tối ưu chính sách bằng Reinforcement Learning. Chi phí tạo đích giáo viên và chạy Collect--Replay vẫn là một phần của training.
+
+Đối chiếu địa phương đo hệ thống đầy đủ trên cùng mẫu. Hiệu ứng riêng của timing cần ablation giữ checkpoint và giao thức tương thích. Kết quả công bố của R-Search\cite{rsearch} dùng giao thức riêng, gồm dữ liệu huấn luyện 2WikiMultiHopQA, nên không dùng làm đối chứng có kiểm soát cho ART. Phụ lục~\ref{app:repro} mô tả phạm vi của phép đếm workload.

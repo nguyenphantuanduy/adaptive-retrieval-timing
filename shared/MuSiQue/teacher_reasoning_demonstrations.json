@@ -1,0 +1,210 @@
+{
+  "title": "Teacher Reasoning Demonstrations",
+  "purpose": "Provide manually verified examples to guide teacher-model generation for multi-hop question answering.",
+  "authoring_note": "These demonstrations are written manually using the question and golden supporting documents. Question decomposition is used as a reference during authoring, not necessarily as teacher-model input.",
+  "demonstrations": [
+    {
+      "id": 1,
+      "hop_count": 2,
+      "question": "Who is the spouse of the Green performer?",
+      "golden_documents": [
+        {
+          "document_id": 1,
+          "title": "Green (Steve Hillage album)",
+          "text": "Green is the fourth studio album by British progressive rock musician Steve Hillage."
+        },
+        {
+          "document_id": 2,
+          "title": "Miquette Giraudy",
+          "text": "Miquette Giraudy is a keyboard player and vocalist, best known for her work in Gong and with her partner Steve Hillage. She and Hillage currently form the core of the ambient band System 7."
+        }
+      ],
+      "reasoning": "To answer this question, we first need to identify who the performer of Green is. According to the document \"Green (Steve Hillage album),\" Green is an album by the British musician Steve Hillage. Therefore, Steve Hillage is the performer we are looking for.\n\nNext, we need to determine who Steve Hillage's spouse is. The document \"Miquette Giraudy\" describes Miquette Giraudy as Steve Hillage's partner. Since this document is a personal biography describing her professional background and personal association with Steve Hillage, we interpret \"partner\" in this context as referring to a romantic or life partner rather than a business or professional partner. Based on this contextual interpretation, we assume that Miquette Giraudy is Steve Hillage's spouse. Therefore, the answer is Miquette Giraudy.\n\n<answer>\nMiquette Giraudy\n</answer>",
+      "answer": "Miquette Giraudy",
+      "dataset_answer": "Miquette Giraudy",
+      "question_decomposition": [
+        {
+          "step": 1,
+          "subject": "Green",
+          "relation": "performer",
+          "object": "Steve Hillage"
+        },
+        {
+          "step": 2,
+          "subject": "Steve Hillage",
+          "relation": "partner",
+          "object": "Miquette Giraudy",
+          "interpretation": "Interpreted as spouse based on biographical context."
+        }
+      ],
+      "review_notes": {
+        "hop_count": 2,
+        "gold_answer": "Miquette Giraudy",
+        "reasoning_manually_reviewed": true,
+        "evidence_reviewed": true,
+        "assumption_explicitly_stated": true,
+        "assumption_type": "Context-supported semantic inference"
+      }
+    },
+    {
+      "id": 2,
+      "hop_count": 3,
+      "question": "Who is the president of the newly declared independent country that is part of the Commission of Truth and Friendship with the country that eats Kemplang?",
+      "golden_documents": [
+        {
+          "document_id": 1,
+          "title": "Kemplang",
+          "text": "Kemplang is a traditional savory fish cracker (\"krupuk ikan\") snack commonly found in southern parts of Sumatra, Indonesia. Kemplang crackers are commonly made of \"ikan tenggiri\" (wahoo) or any type of Spanish mackerel, mixed with tapioca starch and other flavorings, sun-dried and then grilled or fried."
+        },
+        {
+          "document_id": 2,
+          "title": "Indonesia–Timor Leste Commission of Truth and Friendship",
+          "text": "The Indonesia–Timor Leste Commission on Truth and Friendship was a truth commission established jointly by the governments of Indonesia and East Timor in August 2005. The commission was officially created to investigate acts of violence that occurred around the independence referendum held in East Timor in 1999 and sought to find the \"conclusive truth\" behind the events. After holding private hearings and document reviews, the commission handed in the final report on July 15, 2008 to the presidents of both nations, and was fully endorsed by Indonesian President Susilo Bambang Yudhoyono, providing the first acknowledgement by the government of Indonesia of the human rights violations committed by state institutions in Timor. The commission is notable for being the first modern truth commission to be bilateral."
+        },
+        {
+          "document_id": 3,
+          "title": "East Timor",
+          "text": "Democratic Republic of Timor-Leste (Tetum: Repúblika Demokrátika Timór Lorosa'e; Portuguese: República Democrática de Timor-Leste). Government: Unitary semi-presidential constitutional republic. President: Francisco Guterres. Prime Minister: Mari Alkatiri. Independence declared 28 November 1975; independence restored 20 May 2002."
+        }
+      ],
+      "reasoning": "To answer this question, we first need to identify the country associated with Kemplang. According to the document \"Kemplang,\" Kemplang is a traditional fish cracker commonly found in southern parts of Sumatra, Indonesia. Therefore, the country associated with Kemplang is Indonesia.\n\nNext, we need to identify the other country involved in the Commission of Truth and Friendship with Indonesia. The document \"Indonesia–Timor Leste Commission of Truth and Friendship\" states that the commission was established jointly by the governments of Indonesia and East Timor. Since Indonesia is the country identified in the previous step, the other country is East Timor.\n\nFinally, we need to determine the president of East Timor. The document \"East Timor\" identifies Francisco Guterres as its president. Therefore, the answer is Francisco Guterres.\n\n<answer>\nFrancisco Guterres\n</answer>",
+      "answer": "Francisco Guterres",
+      "dataset_answer": "Francisco Guterres",
+      "question_decomposition": [
+        {
+          "step": 1,
+          "subject": "Kemplang",
+          "relation": "country",
+          "object": "Indonesia"
+        },
+        {
+          "step": 2,
+          "subject": "Indonesia–Timor Leste Commission of Truth and Friendship",
+          "relation": "other country",
+          "object": "East Timor"
+        },
+        {
+          "step": 3,
+          "subject": "East Timor",
+          "relation": "president",
+          "object": "Francisco Guterres"
+        }
+      ],
+      "review_notes": {
+        "hop_count": 3,
+        "gold_answer": "Francisco Guterres",
+        "reasoning_manually_reviewed": true,
+        "evidence_reviewed": true
+      }
+    },
+    {
+      "id": 3,
+      "hop_count": 4,
+      "question": "Who is the president of the newly declared independent country, that established the Timor Leste Commission of Truth and Friendship, with the country containing the airport that includes Lion Air?",
+      "golden_documents": [
+        {
+          "document_id": 1,
+          "title": "Lion Air",
+          "text": "On 4 March 2006, Lion Air Flight 8987, a McDonnell Douglas MD-82, crashed after landing at Juanda International Airport. Reverse thrust was used during landing, although the left thrust reverser was stated to be out of service. This caused the aircraft to veer to the right and skid off the runway, coming to rest about from the approach end of the runway. There were no fatalities, but the aircraft was badly damaged and later written off."
+        },
+        {
+          "document_id": 2,
+          "title": "Cathay Pacific Flight 780",
+          "text": "Cathay Pacific Flight 780 was a flight from Surabaya Juanda International Airport in Indonesia to Hong Kong International Airport on 13 April 2010. There were 309 passengers and a crew of 13 on board. As Flight 780 neared Hong Kong the crew were unable to change the thrust output of the engines. The aircraft, an Airbus A330-342, landed at almost twice the speed of a normal landing, suffering minor damage. The 57 passengers who sustained injuries were hurt in the ensuing slide evacuation; one of them received serious injuries."
+        },
+        {
+          "document_id": 3,
+          "title": "Indonesia–Timor Leste Commission of Truth and Friendship",
+          "text": "The Indonesia–Timor Leste Commission on Truth and Friendship was a truth commission established jointly by the governments of Indonesia and East Timor in August 2005. The commission was officially created to investigate acts of violence that occurred around the independence referendum held in East Timor in 1999 and sought to find the \"conclusive truth\" behind the events. After holding private hearings and document reviews, the commission handed in the final report on July 15, 2008 to the presidents of both nations, and was fully endorsed by Indonesian President Susilo Bambang Yudhoyono, providing the first acknowledgement by the government of Indonesia of the human rights violations committed by state institutions in Timor. The commission is notable for being the first modern truth commission to be bilateral."
+        },
+        {
+          "document_id": 4,
+          "title": "East Timor",
+          "text": "Democratic Republic of Timor - Leste Repúblika Demokrátika Timór Lorosa'e (Tetum) República Democrática de Timor - Leste (Portuguese) Flag Coat of arms Motto: Unidade, Acção, Progresso (Portuguese) Unidade, Asaun, Progresu (Tetum) (English: \"Unity, Action, Progress\") Anthem: Pátria (Portuguese) (English: \"Fatherland\") Capital and largest city Dili 8° 20′ S 125° 20′ E / 8.34° S 125.34° E / -8.34; 125.34 Coordinates: 8° 20′ S 125° 20′ E / 8.34° S 125.34° E / -8.34; 125.34 Official languages Tetum Portuguese National languages 15 languages (show) Atauru Baikeno Bekais Bunak Fataluku Galoli Habun Idalaka Kawaimina Kemak Makalero Makasae Makuva Mambai Tokodede Religion (2010) 96.9% Roman Catholic 3.1% other religions Demonym East Timorese Timorese Maubere (informal) Government Unitary semi-presidential constitutional republic President Francisco Guterres Prime Minister Mari Alkatiri Legislature National Parliament Formation Portuguese Timor 16th century Independence declared 28 November 1975 Annexation by Indonesia 17 July 1976 Administered by UNTAET 25 October 1999 Independence restored 20 May 2002 Area Total 15,410 km² (5,950 sq mi) (154th) Water (%) negligible Population 2015 census 1,167,242 Density 78 / km² (202.0 / sq mi) GDP (PPP) 2017 estimate Total $4.567 billion Per capita $5,479 (148th) GDP (nominal) 2014 estimate Total $2.498 billion Per capita $3,330 (148th) HDI (2015) 0.605 medium 133rd Currency United States Dollar (USD) Time zone (UTC +9) Drives on the left Calling code +670 ISO 3166 code TL Internet TLD .tl Website timor-leste.gov.tl Fifteen further \"national languages\" are recognised by the Constitution. Centavo coins also used. .tp has been phased out."
+        }
+      ],
+      "reasoning": "To answer this question, we first need to identify the airport associated with Lion Air. According to the document \"Lion Air,\" Lion Air Flight 8987 crashed after landing at Juanda International Airport. Based on this description, we assume that Juanda International Airport was part of the flight's itinerary. Therefore, Juanda International Airport is the airport we are looking for.\n\nNext, we need to determine the country in which Juanda International Airport is located. According to the document \"Cathay Pacific Flight 780,\" the flight departed from Surabaya Juanda International Airport in Indonesia. This establishes the airport's location in Indonesia. Therefore, the country we are looking for is Indonesia.\n\nWe then need to identify the other country that jointly established the Commission of Truth and Friendship with Indonesia. According to the document \"Indonesia–Timor Leste Commission of Truth and Friendship,\" the commission was established jointly by the governments of Indonesia and East Timor. Since Indonesia is the country identified in the previous step, the other country is East Timor.\n\nFinally, we need to determine the president of East Timor. According to the document \"East Timor,\" Francisco Guterres is identified as the president of the Democratic Republic of Timor-Leste. Therefore, the answer is Francisco Guterres.\n\n<answer>\nFrancisco Guterres\n</answer>",
+      "answer": "Francisco Guterres",
+      "dataset_answer": "Francisco Guterres",
+      "question_decomposition": [
+        {
+          "step": 1,
+          "subject": "Lion Air",
+          "relation": "airport used by the airline",
+          "object": "Juanda International Airport"
+        },
+        {
+          "step": 2,
+          "subject": "Juanda International Airport",
+          "relation": "country",
+          "object": "Indonesia"
+        },
+        {
+          "step": 3,
+          "subject": "Indonesia–Timor Leste Commission of Truth and Friendship",
+          "relation": "other country",
+          "object": "East Timor"
+        },
+        {
+          "step": 4,
+          "subject": "East Timor",
+          "relation": "president",
+          "object": "Francisco Guterres"
+        }
+      ],
+      "review_notes": {
+        "hop_count": 4,
+        "gold_answer": "Francisco Guterres",
+        "reasoning_manually_reviewed": true,
+        "evidence_reviewed": true,
+        "assumption_explicitly_stated": true
+      }
+    },
+    {
+      "id": 4,
+      "hop_count": 2,
+      "question": "Who founded the company that distributed the film UHF?",
+      "golden_documents": [
+        {
+          "document_id": 1,
+          "title": "Mike Medavoy",
+          "text": "Morris Mike Medavoy (born January 21, 1941) is an American film producer and executive, co-founder of Orion Pictures (1978), former chairman of TriStar Pictures, former head of production for United Artists (1974–1978) and current chairman and CEO of Phoenix Pictures."
+        },
+        {
+          "document_id": 2,
+          "title": "UHF (film)",
+          "text": "Yankovic and Levey wrote the film after Yankovic's second studio album, looking to apply the musician's parody and comedy to film, and chose the approach of George being a straight man with a vivid imagination to support the inclusion of parodies within the film. They struggled with finding a film production company for financing the film, but were eventually able to get Orion Pictures' support after stating they could keep the film costs under $5 million.\n\nPrincipal filming took place around Tulsa, Oklahoma, with many of the extras for the film from the Tulsa and Dallas, Texas areas."
+        }
+      ],
+      "reasoning": "To answer this question, we first need to identify the company that distributed the film UHF. However, the document \"UHF (film)\" only states that Orion Pictures supported the film financially. It does not provide evidence that Orion Pictures was the film's distributor. Therefore, we cannot identify the film's distributor from the provided documents.\n\n<answer>\nInsufficient evidence in the provided documents.\n</answer>",
+      "answer": "Insufficient evidence in the provided documents.",
+      "dataset_answer": "Mike Medavoy",
+      "question_decomposition": [
+        {
+          "step": 1,
+          "subject": "UHF",
+          "relation": "distributed by",
+          "object": "Orion Pictures",
+          "supported_by_provided_documents": false
+        },
+        {
+          "step": 2,
+          "subject": "Orion Pictures",
+          "relation": "founded by",
+          "object": "Mike Medavoy",
+          "supported_by_provided_documents": true
+        }
+      ],
+      "review_notes": {
+        "hop_count": 2,
+        "gold_answer": "Mike Medavoy (according to the provided question decomposition)",
+        "reasoning_manually_reviewed": true,
+        "evidence_reviewed": true,
+        "unsupported_hop_identified": true,
+        "unsupported_relation": "Financing/support → Distribution",
+        "final_answerability": "Insufficient evidence in the provided documents",
+        "assumption_made_to_bridge_the_evidence_gap": false
+      }
+    }
+  ]
+}

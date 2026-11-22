@@ -1,0 +1,183 @@
+% ============================================================
+% HYPOTHESIS 1 — THEORY
+% ============================================================
+
+\section{Hypothesis 1 — Verification}
+
+\begin{frame}{Hypothesis 1: Theory}
+
+\textbf{Hypothesis 1:}
+
+Nếu hệ số $d$ điều khiển mức độ đóng góp của retrieved documents vào attention, thì LM loss sẽ thay đổi theo $d$.
+
+\vspace{0.35cm}
+
+\[
+A
+=
+dA_{\mathrm{doc}}
++
+(1-d)A_{\mathrm{no\_doc}}
+\]
+
+\vspace{0.2cm}
+
+\begin{itemize}
+    \item $d=0$: không sử dụng thông tin từ retrieved documents.
+    \item $d=1$: sử dụng hoàn toàn thông tin từ retrieved documents.
+    \item $0<d<1$: kết hợp attention có và không có documents.
+\end{itemize}
+
+\vspace{0.2cm}
+
+\textbf{Verification:}
+
+Giữ cố định question, answer và documents.
+
+\vspace{0.1cm}
+
+Thay đổi:
+
+\[
+d=0/32,\ldots,32/32
+\]
+
+\vspace{0.1cm}
+
+và quan sát:
+
+\[
+L_{\mathrm{LM}}(d)
+\]
+
+\end{frame}
+
+
+% ============================================================
+% HYPOTHESIS 1 — EXAMPLE
+% ============================================================
+
+\begin{frame}{Hypothesis 1: Example}
+
+\textbf{Question:}
+
+\textit{Who wrote Common Sense and why was it important?}
+
+\vspace{0.25cm}
+
+\textbf{Retrieved Documents:}
+
+\begin{itemize}
+    \item \textbf{Common Sense:}
+
+    Common Sense was a pamphlet written by Thomas Paine.
+
+    \item \textbf{Thomas Paine:}
+
+    Thomas Paine was an author and key figure in the American Revolution. His work Common Sense crystallized the rebellious demand for independence from Great Britain.
+\end{itemize}
+
+\vspace{0.2cm}
+
+\textbf{Model Input:}
+
+\texttt{<observation>}
+
+\vspace{0.1cm}
+
+\texttt{Title: Common Sense}
+
+\texttt{Common Sense was a pamphlet written by Thomas Paine.}
+
+\vspace{0.1cm}
+
+\texttt{Title: Thomas Paine}
+
+\texttt{Thomas Paine was an author and key figure in the American Revolution.}
+
+\vspace{0.1cm}
+
+\texttt{</observation>}
+
+\vspace{0.2cm}
+
+\textbf{Experiment:}
+
+Giữ cố định input và thay đổi $d$ từ $0$ đến $1$ để đo $L_{\mathrm{LM}}(d)$.
+
+\end{frame}
+
+%------------------------------------------------------------
+% HYPOTHESIS VERIFICATION - EXAMPLE 1
+%------------------------------------------------------------
+
+\begin{frame}[t]
+    \frametitle{Hypothesis Verification: Example (1/2)}
+
+    \scriptsize
+
+    \texttt{<|im\_start|>system}
+
+    \texttt{You are a helpful assistant that can solve the given question step by step.}\\
+    \texttt{For each step, start by explaining your thought process.}\\
+    \texttt{If additional information is needed, the system will perform retrieval and return}\\
+    \texttt{the top search results within <observation> and </observation>. Continue your}\\
+    \texttt{reasoning using the retrieved information.}\\
+    \texttt{When you know the final answer, provide the final answer within <answer> and}\\
+    \texttt{</answer> tags.}
+
+    \texttt{<|im\_end|>}
+
+    \vspace{0.1cm}
+
+    \texttt{<|im\_start|>user}
+
+    \texttt{Who wrote Common Sense and why was it important?<|im\_end|>}
+
+    \vspace{0.1cm}
+
+    \texttt{<|im\_start|>assistant}
+
+    \texttt{<|im\_end|>}
+
+\end{frame}
+
+
+%------------------------------------------------------------
+% HYPOTHESIS VERIFICATION - EXAMPLE 2
+%------------------------------------------------------------
+
+\begin{frame}[t]
+    \frametitle{Hypothesis Verification: Example (2/2)}
+
+    \scriptsize
+
+    \texttt{<|im\_start|>user}
+
+    \texttt{<observation>}
+
+    \texttt{Title: Common Sense}
+
+    \texttt{Common Sense was a pamphlet written by Thomas Paine.}
+
+    \vspace{0.05cm}
+
+    \texttt{Title: Thomas Paine}
+
+    \texttt{Thomas Paine was an author and key figure in the American Revolution.}\\
+    \texttt{His work Common Sense crystallized the rebellious demand for independence}\\
+    \texttt{from Great Britain.}
+
+    \texttt{</observation><|im\_end|>}
+
+    \vspace{0.1cm}
+
+    \texttt{<|im\_start|>assistant}
+
+    \vspace{0.1cm}
+
+    \texttt{Thomas Paine wrote Common Sense, and it helped build support for American independence.}
+
+    \texttt{<|im\_end|>}
+
+\end{frame}

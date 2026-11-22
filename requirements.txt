@@ -1,5 +1,13 @@
-torch
-transformers
+# torch
+transformers==5.15.1
 datasets
 gdown
 accelerate
+sentencesplit
+spacy
+faiss-cpu
+huggingface_hub
+numpy
+tqdm
+safetensors
+tensorboard

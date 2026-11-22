@@ -1,17 +1,45 @@
+import json
+from pathlib import Path
 
-A = 32
-B = 387
+# ============================================================
+# Configuration
+# ============================================================
 
-result = 0
-total_token = 0
-for i in range(8):
-    total_token += A
-    result += A * total_token
-    if i >= 6:
-        total_token += B * 3
-        result += (B * 3) * total_token
+INPUT_FILE = Path("teacher_hypothesis_demonstrations.jsonl")
 
-print(result)
 
-import math
-print(math.sqrt(result))
+# ============================================================
+# Main
+# ============================================================
+
+def main():
+    if not INPUT_FILE.exists():
+        print(f"File not found: {INPUT_FILE.resolve()}")
+        return
+
+    with INPUT_FILE.open("r", encoding="utf-8") as f:
+        for idx, line in enumerate(f, start=1):
+            line = line.strip()
+
+            if not line:
+                continue
+
+            try:
+                sample = json.loads(line)
+            except json.JSONDecodeError as e:
+                print(f"[Error] Invalid JSON at line {idx}: {e}")
+                continue
+
+            print("=" * 100)
+            print(f"Sample: {idx}")
+            print(f"Hop: {sample.get('hop', 'N/A')}")
+            print(f"Question: {sample.get('question', 'N/A')}")
+            print("-" * 100)
+            print("Teacher Generation Output:")
+            print(sample.get("teacher_generation_output", "N/A"))
+            print("=" * 100)
+            print()
+
+
+if __name__ == "__main__":
+    main()

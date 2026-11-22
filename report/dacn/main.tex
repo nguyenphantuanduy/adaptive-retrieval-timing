@@ -1,0 +1,60 @@
+% =====================================================================
+%  BÁO CÁO ĐỒ ÁN CHUYÊN NGÀNH -- MẪU LaTeX (TIẾNG VIỆT)
+%  Ho Chi Minh City University of Technology (HCMUT) - VNU-HCM
+%  Biên dịch: pdflatex -> bibtex -> pdflatex -> pdflatex
+%  (hoặc: latexmk -pdf main.tex; trên Overleaf chọn trình biên dịch pdfLaTeX)
+% =====================================================================
+\documentclass[vietnamese,final]{hcmut-thesis}
+
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage[nameinlink]{cleveref}   % dùng \Cref{} thay cho \ref{}
+
+% ---------------------------------------------------------------------
+%  Thông tin báo cáo -- CHỈNH SỬA Ở ĐÂY
+% ---------------------------------------------------------------------
+\reporttype{Đồ án chuyên ngành}
+\title{Thời điểm truy hồi thích ứng: Học quyết định truy hồi mà không cần giám sát trực tiếp hay học tăng cường}
+\stumajor{Khoa học Máy tính}
+\supervisor{PGS.~TS.~Quản Thành Thơ}
+\stuname{Nguyễn Phan Tuấn Duy -- 2310491 -- MT23KHM2}
+\hypersetup{plainpages=false}
+\setlength{\emergencystretch}{2em}
+
+\begin{document}
+\hypersetup{pageanchor=false}
+\coverpage%
+\hypersetup{pageanchor=true}
+
+\frontmatter%
+\include{chapters/front/declaration}
+\include{chapters/front/acknowledgements}
+\include{chapters/front/abstract}
+\include{chapters/front/workload}
+
+\tableofcontents
+\clearpage
+\listoffigures
+\clearpage
+\listoftables
+
+\mainmatter%
+\counterwithin{equation}{chapter}
+\counterwithin{table}{chapter}
+\counterwithin{figure}{chapter}
+
+\include{chapters/main/01-introduction}
+\include{chapters/main/02-background}
+\include{chapters/main/03-methodology}
+\include{chapters/main/04-implementation}
+\include{chapters/main/05-evaluation}
+\include{chapters/main/06-conclusion}
+
+\bibliographystyle{plain}
+{\raggedright\bibliography{refs/references}}
+
+\appendix
+\include{chapters/back/appendix-a}
+\include{chapters/back/appendix-b}
+
+\end{document}
