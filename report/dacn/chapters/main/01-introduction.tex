@@ -1,0 +1,29 @@
+\chapter{Giới thiệu}
+\label{chap:intro}
+\section{Lý do chọn đề tài}
+Trong hỏi đáp nhiều bước, mô hình có thể cần nhận diện một thực thể trung gian trước khi biết nên tìm bằng chứng nào tiếp theo. Một lượt truy hồi từ câu hỏi ban đầu có thể chỉ giải quyết mắt xích đầu tiên. Ngược lại, truy hồi quá thường xuyên đưa thêm distractor documents vào ngữ cảnh và làm tăng tải xử lý. Một pipeline RAG có thể phải thực hiện query rewriting, tạo embedding, vector search trên corpus lớn và reranking. Tùy thiết kế, các bước này có thể làm tăng tài nguyên sử dụng và latency. Đây là động lực nghiên cứu, còn tác động thực tế phụ thuộc vào hiện thực và cấu hình hệ thống.
+
+\section{Phát biểu bài toán}
+Cho câu hỏi \(q\), một kho đoạn văn và tiền tố sinh đến thời điểm \(t\), Decoder phải quyết định có cần truy hồi thêm trước khi tiếp tục sinh hay không. Thời điểm truy hồi là vị trí trong chuỗi sinh mà hệ thống đưa ra quyết định này. Ví dụ trong \cref{fig:baseline-case} cho thấy hai hệ thống xử lý cùng câu hỏi MuSiQue.
+
+\begin{center}
+\begin{minipage}{\linewidth}\centering
+\input{graphics/case-baseline.tex}
+\captionof{figure}{Minh họa bài toán trên MuSiQue, ID 27. Câu hỏi, ground truth, raw outputs và đoạn trích lấy từ các bản ghi gốc.}
+\label{fig:baseline-case}
+\end{minipage}
+\end{center}
+
+No-RAG và Vanilla RAG đều không khớp đáp án chuẩn. Đoạn đứng đầu của Vanilla RAG nhận diện Bindi Irwin, một thực thể trung gian mà câu hỏi ban đầu chưa nêu tên. Bài toán đặt ra là học cách quyết định có nên truy hồi tiếp khi trạng thái sinh đã mang thêm thông tin.
+
+\section{Mục tiêu}
+Câu hỏi nghiên cứu là liệu mô hình có thể học thời điểm truy hồi từ sự đánh đổi giữa LM Loss và retrieval regularization, không cần nhãn trực tiếp hoặc Reinforcement Learning cho các quyết định truy hồi. Đồ án khảo sát tín hiệu nền tảng qua H1/H2, xây dựng phương pháp kết hợp Decision Head, Attention Mixing và Collect--Replay, rồi đánh giá hệ thống trên ba benchmark cùng threshold sweep.
+
+\section{Phạm vi}
+Đồ án chuyên ngành nghiên cứu thời điểm truy hồi cho Multi-hop QA, từ phép thăm dò đến đánh giá hệ thống. Lựa chọn công cụ và huấn luyện đồng thời retriever--generator thuộc phạm vi nghiên cứu tiếp theo của Đồ án tốt nghiệp.
+
+\section{Đóng góp}
+Đồ án chuyên ngành đóng góp một khảo sát thực nghiệm có kiểm soát về ảnh hưởng của bằng chứng và mixing coefficient lên LM Loss và gradient. Về phương pháp, đồ án kết nối điểm quyết định với Attention Mixing khả vi và xây dựng quy trình replay để học điểm này. Về hiện thực, hệ thống tích hợp truy hồi vào vòng sinh tự hồi quy và được so sánh với No-RAG và Vanilla RAG trên các mẫu ghép cặp. Đồ án dùng dữ liệu văn bản từ giáo viên để huấn luyện.
+
+\section{Cấu trúc báo cáo}
+\Cref{chap:background} trình bày nền tảng và công trình liên quan, \cref{chap:method,chap:implementation} mô tả phương pháp và hiện thực, \cref{chap:evaluation} phân tích thực nghiệm, và \cref{chap:conclusion} tổng kết.

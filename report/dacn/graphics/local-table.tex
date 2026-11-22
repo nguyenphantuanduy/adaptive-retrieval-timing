@@ -1,0 +1,19 @@
+\begin{table}[htbp]\centering\small
+\caption{Đối chứng địa phương, 500 mẫu mỗi bộ. ART dùng ngưỡng 0.4297. Chỉ số theo phần trăm.}
+\label{tab:local}
+\begin{tabular}{@{}llrrrl@{}}
+\toprule
+Bộ dữ liệu & Hệ thống & Acc & F1 & EM & ID \\
+\midrule
+MuSiQue & No-RAG & 0.80 & 5.61 & 0.60 & M05 \\
+ & Vanilla RAG & 6.20 & 10.25 & 4.80 & M06 \\
+ & ART & 25.80 & 31.17 & 21.60 & M12 \\
+HotpotQA & No-RAG & 14.00 & 20.19 & 14.20 & M03 \\
+ & Vanilla RAG & 33.20 & 39.61 & 30.20 & M04 \\
+ & ART & 42.20 & 48.24 & 37.20 & M08 \\
+2WikiMultiHopQA & No-RAG & 24.80 & 27.58 & 24.40 & M01 \\
+ & Vanilla RAG & 34.80 & 37.81 & 32.20 & M02 \\
+ & ART & 48.20 & 46.30 & 37.00 & M07 \\
+\bottomrule
+\end{tabular}
+\end{table}

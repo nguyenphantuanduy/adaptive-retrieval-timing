@@ -1,0 +1,41 @@
+\chapter{Phương pháp đề xuất}
+\label{chap:method}
+\section{Tổng quan hướng tiếp cận}
+Decoder Qwen2.5-3B-Instruct\cite{qwen} của ART cung cấp trạng thái cuối khối \(h_t\). Decision Head dùng một lớp tuyến tính và sigmoid để tạo điểm
+\begin{equation}
+s_t=\sigma(w^\top h_t+b).
+\label{eq:gate}
+\end{equation}
+Trong inference, ART so sánh \(s_t\) với ngưỡng \(\tau\) ở thời điểm ứng viên. Giá trị \(d\) trong các probe là đầu vào ép trước; điểm \(s_t\) trong hệ thống là dự đoán từ trạng thái Decoder.
+Khi chấp nhận một lần truy hồi, hệ thống gắn điểm này với quan sát mới và dùng nó làm hệ số trộn \(d\) cho các lần gọi Decoder sau đó, đến khi nhận quan sát thay thế. Trong phép thăm dò, \(d\) là giá trị ép trước, độc lập với Decision Head.
+\section{Dữ liệu}
+Các phép thăm dò dùng mẫu kiểm chứng nhiều bước của MuSiQue, nhóm theo số bước và tỷ lệ đoạn hỗ trợ so với đoạn gây nhiễu. Câu hỏi, tài liệu và đích giáo viên được giữ cố định khi quét hệ số trong cùng điều kiện. Dữ liệu huấn luyện sinh từ phần huấn luyện MuSiQue. Bộ sinh dữ liệu giáo viên dùng Qwen3-8B, bốn few-shot examples và hướng dẫn xử lý khi bằng chứng không đủ. Ba bộ kiểm thử MuSiQue, HotpotQA và 2WikiMultiHopQA có vai trò đánh giá cuối, tách khỏi đích huấn luyện\cite{musique,hotpot,twowiki}.
+\section{Phương pháp}
+\subsection{Attention Mixing}
+Từ cùng dòng trạng thái, hệ thống chiếu \(Q,K,V\), rồi tính hai biến thể RoPE cho truy vấn và khóa. Đặt \(C\) là mặt nạ nhân quả, \(D\) là mặt nạ khóa của đoạn quan sát mới nhất và \(m\) là chiều khóa. Hai phân bố là
+\begin{align}
+A_+ &= \operatorname{softmax}(Q_+K_+^\top/\sqrt{m}+C),\\
+A_- &= \operatorname{softmax}(Q_-K_-^\top/\sqrt{m}+C+D),\\
+O &= \operatorname{Dropout}\big(dA_++(1-d)A_-\big)V_+.
+\label{eq:mix}
+\end{align}
+Nhánh trừ hiệu chỉnh vị trí sau đoạn che bằng độ dài đoạn. Hai nhánh dùng chung giá trị của dòng có tài liệu. Sau phép trộn là phép chiếu đầu ra. Nếu thiếu mặt nạ hoặc thiếu \(d\), dùng nhánh cộng. Với các phép chiếu cố định, phần khối lượng trực tiếp trên khóa bị che tỉ lệ với \(d\); sau nhiều lớp trạng thái trung gian cũng phụ thuộc \(d\). Nhánh trừ vẫn có thể chịu ảnh hưởng của quan sát cũ trong tiền tố.
+\Cref{fig:attention} minh họa hai nhánh Attention Mixing dùng chung value. Cả hai nhận cùng trạng thái đầu vào.
+\begin{figure}[htbp]
+\centering
+\includegraphics[width=.87\linewidth]{graphics/attention-figure.pdf}
+\caption{Trộn hai phân bố chú ý từ cùng trạng thái. Nhánh trừ che quan sát mới nhất, trong khi hai nhánh dùng chung giá trị. Sơ đồ do đồ án dựng từ mã hiện thực.}
+\label{fig:attention}
+\end{figure}
+\subsection{Mục tiêu học và giả thuyết}
+Với tập vị trí đích \(\mathcal{T}\), mất mát nhân quả lấy dự đoán tại \(t-1\) cho token đích tại \(t\).
+\begin{equation}
+\mathcal{L}_{\mathrm{LM}}=-\frac{1}{|\mathcal{T}|}
+\sum_{t\in\mathcal{T}}\log p_\theta(y_t\mid x_{<t}),\qquad
+\mathcal{L}=\mathcal{L}_{\mathrm{LM}}+\lambda\sum_{j\in J}s_j .
+\label{eq:loss}
+\end{equation}
+Các vị trí câu hỏi và quan sát chèn vào được bỏ qua khi tính mất mát. \(J\) là các lần cộng điểm trong logic phát lại; nó có thể chứa đóng góp của nhánh kết thúc và khác bộ đếm truy vấn. Mã hiện tại dùng \(\lambda=0.05\). Gradient qua sigmoid có thừa số \(s_j(1-s_j)\). Danh tính tài liệu, so sánh ngưỡng và đồng xu khám phá được xác định ở bước thu thập, nằm ngoài đồ thị gradient.
+Xét minh họa một điểm trong đó \(L(d)=L_{\mathrm{LM}}(d)+\lambda d\). Khi đó \(\partial L/\partial d=\partial L_{\mathrm{LM}}/\partial d+\lambda\). Nếu \(\partial L_{\mathrm{LM}}/\partial d<-\lambda\), bước gradient descent cục bộ trên hệ số vô hướng sẽ tăng \(d\); nếu lớn hơn \(-\lambda\), bước này sẽ giảm \(d\). Trong ART, optimizer cập nhật tham số của Decision Head qua Attention Mixing khi replay và qua regularizer. Minh họa vô hướng giải thích cạnh tranh giữa hai tín hiệu, không dự báo chiều của từng điểm trong một bước cập nhật chung.
+
+H1 dự đoán LM Loss nhạy với hệ số và thành phần bằng chứng. H2 đo \(g(d)=\partial\mathcal{L}_{\mathrm{LM}}/\partial d\) để xem gradient cục bộ có thể điều chỉnh mức chú ý sau khi có tài liệu hay không. Chiều \(g(d)<0\) cho thấy tăng \(d\) làm giảm mất mát tại lân cận đang xét.

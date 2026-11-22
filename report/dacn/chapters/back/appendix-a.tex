@@ -1,0 +1,17 @@
+\chapter{Kết quả bổ sung}
+\label{app:examples}
+\section{Bản ghi đối sánh MuSiQue}
+Ba dòng dữ liệu cùng mang ID 27, cùng câu hỏi và ground truth. ART dùng cấu hình top-5, \(\tau=0.4297\). Các raw outputs dưới đây giữ nguyên nội dung trước bước chấm điểm.
+
+\begin{quote}\SingleSpacing
+\input{graphics/case-outputs.tex}
+\end{quote}
+
+\section{Truy vấn và tài liệu theo thứ tự ghi nhận}
+No-RAG không có truy vấn hay tài liệu. Vanilla RAG ghi một truy vấn và năm đoạn; ART ghi hai truy vấn với năm đoạn mỗi lượt. Các mục dưới đây trích trực tiếp từ bản ghi. Chỉ lược bỏ những phần được đánh dấu.
+
+\begin{quote}\SingleSpacing
+\input{graphics/case-trace.tex}
+\end{quote}
+
+Đoạn đầu lượt một nhận diện diễn viên, còn các đoạn 1 và 2 của lượt hai nối diễn viên với đáp án. Các đoạn trong cùng lượt được nhóm theo thứ tự top-5 trong log. Bản ghi cho biết tài liệu nào đã được truy hồi, chưa xác định được đoạn nào đã quyết định câu trả lời.

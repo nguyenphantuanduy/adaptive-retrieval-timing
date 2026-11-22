@@ -1,0 +1,12 @@
+\chapter{Kết luận và hướng phát triển}
+\label{chap:conclusion}
+\section{Kết luận}
+Đồ án khảo sát cách học retrieval timing từ LM Loss và retrieval regularization. H1 cho thấy LM Loss nhạy với mức trộn và thành phần bằng chứng; H2 ghi nhận tín hiệu gradient hữu ích trong một số vùng. ART dùng Decision Head, Attention Mixing khả vi và Collect--Replay để học điểm mà không cần nhãn quyết định trực tiếp hay Reinforcement Learning.
+
+Trên MuSiQue, HotpotQA và 2WikiMultiHopQA, ART tại \(\tau=0.4297\) cải thiện Acc, F1 và EM so với hai đối chứng địa phương. Trong threshold sweep, các ngưỡng cao hơn ghi nhận ít truy vấn hơn; thay đổi F1 phụ thuộc benchmark. Kết quả hệ thống và các probe bổ sung cho nhau khi đánh giá đóng góp của cơ chế học.
+
+\section{Hạn chế}
+Các probe cấp sẵn bằng chứng và dùng teacher forcing, nên chỉ xác nhận tín hiệu trong điều kiện khảo sát. So sánh hệ thống ghép cặp cùng câu hỏi nhưng chưa có ablation kiểm soát checkpoint và prompt để tách riêng hiệu ứng timing. Retrieval count đo hành vi gọi tìm kiếm; muốn đánh giá compute cần đo thêm độ dài ngữ cảnh, số token sinh và độ trễ thực tế.
+
+\section{Hướng phát triển}
+Có thể kiểm tra thêm bằng ngưỡng chọn trên tập xác thực và ablation giữ checkpoint cố định. Hai hướng Đồ án tốt nghiệp là khảo sát \emph{tool selection} theo trạng thái suy luận và huấn luyện chung retriever--generator để kiểm tra ảnh hưởng của tín hiệu sinh lên chất lượng bằng chứng.

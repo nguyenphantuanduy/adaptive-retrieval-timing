@@ -1,0 +1,117 @@
+% ============================================================
+% HYPOTHESIS 2 — THEORY
+% ============================================================
+
+\section{Hypothesis 2 — Verification}
+
+\begin{frame}{Hypothesis 2: Theory}
+
+\textbf{Hypothesis 2:}
+
+Nếu LM loss thay đổi theo retrieval coefficient $d$, gradient
+
+\[
+\frac{\partial L_{\mathrm{LM}}}{\partial d}
+\]
+
+có thể cung cấp tín hiệu cục bộ cho retrieval decision.
+
+\vspace{0.25cm}
+
+\textbf{Gradient interpretation:}
+
+\begin{itemize}
+    \item
+    \[
+    \frac{\partial L_{\mathrm{LM}}}{\partial d}<0
+    \]
+    Tăng $d$ có xu hướng làm giảm LM loss.
+
+    \item
+    \[
+    \frac{\partial L_{\mathrm{LM}}}{\partial d}>0
+    \]
+    Tăng $d$ có xu hướng làm tăng LM loss.
+\end{itemize}
+
+\vspace{0.2cm}
+
+\textbf{Verification:}
+
+Với mỗi decision level:
+
+\[
+d=0/32,\ldots,32/32
+\]
+
+tính:
+
+\[
+\frac{\partial L_{\mathrm{LM}}}{\partial d}
+\]
+
+\end{frame}
+
+
+% ============================================================
+% HYPOTHESIS 2 — EXAMPLE
+% ============================================================
+
+\begin{frame}{Hypothesis 2: Example}
+
+\textbf{Question:}
+
+\textit{Who wrote Common Sense and why was it important?}
+
+\vspace{0.2cm}
+
+\textbf{Retrieved Documents:}
+
+\begin{itemize}
+    \item \textbf{Common Sense:}
+
+    Common Sense was a pamphlet written by Thomas Paine.
+
+    \item \textbf{Thomas Paine:}
+
+    Thomas Paine was an author and key figure in the American Revolution. His work Common Sense crystallized the rebellious demand for independence from Great Britain.
+\end{itemize}
+
+\vspace{0.15cm}
+
+\textbf{Experiment:}
+
+Giữ cố định question, answer và documents.
+
+\vspace{0.1cm}
+
+Thay đổi:
+
+\[
+d=0/32,\ldots,32/32
+\]
+
+\vspace{0.1cm}
+
+Với mỗi $d$, tính:
+
+\[
+L_{\mathrm{LM}}(d)
+\]
+
+và:
+
+\[
+\frac{\partial L_{\mathrm{LM}}}{\partial d}.
+\]
+
+\vspace{0.15cm}
+
+\textbf{Expected observation:}
+
+\begin{itemize}
+    \item $\frac{\partial L_{\mathrm{LM}}}{\partial d}<0$: retrieved information có ích.
+    \item $\frac{\partial L_{\mathrm{LM}}}{\partial d}>0$: retrieved information không cần thiết hoặc gây hại.
+\end{itemize}
+
+\end{frame}

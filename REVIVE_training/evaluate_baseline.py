@@ -1,14 +1,23 @@
-"""Score No-RAG and Vanilla RAG completions as R-Search baseline predictions."""
+"""Score baseline completions after removing Qwen text-control tokens."""
 import argparse
 import json
+import re
 from pathlib import Path
 
 from REVIVE_training.evaluate_art_pure import get_output_file, load_results
 from REVIVE_training.utils import acc_score, compute_exact, f1_scorer
 
+# Text/chat control tokens from Qwen2.5-3B-Instruct's tokenizer_config.json.
+TEXT_CONTROL_TOKENS = ("<|endoftext|>", "<|im_start|>", "<|im_end|>")
+TEXT_CONTROL_PATTERN = re.compile("|".join(map(re.escape, TEXT_CONTROL_TOKENS)))
+
+
+def clean_prediction(prediction):
+    return TEXT_CONTROL_PATTERN.sub("", prediction)
+
 
 def score_baseline(results):
-    predictions = [row["pure_art_answer"] for row in results]
+    predictions = [clean_prediction(row["pure_art_answer"]) for row in results]
     answers = [row["golden_answers"] for row in results]
     return {
         "num_samples": len(results),
@@ -25,7 +34,10 @@ def main():
     parser.add_argument("--filename", type=Path, required=True, help="Baseline JSONL to score.")
     args = parser.parse_args()
 
-    results = load_results(args.filename)
+    try:
+        results = load_results(args.filename)
+    except FileNotFoundError:
+        parser.error(f"baseline result not found: {args.filename}")
     if not results:
         parser.error("input contains no baseline predictions")
     metrics = score_baseline(results)

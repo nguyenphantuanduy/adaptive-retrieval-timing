@@ -1,0 +1,175 @@
+% ============================================================
+% SECTION — DEMO V3 & EVALUATION
+% ============================================================
+\section{Demo v3 \& Evaluation}
+
+%------------------------------------------------------------
+% Slide 1 — Training Configuration
+%------------------------------------------------------------
+\begin{frame}{Demo v3: Training Configuration}
+
+\small
+
+\begin{itemize}
+    \item \textbf{Training duration:} 0.75 epoch
+    \item \textbf{Trainable layers:} Last 40\% of model layers
+    \item \textbf{Gradient accumulation:} 32 steps
+    \item \textbf{Initial exploration probability:} 0.3
+    \item \textbf{Exploration probability range:} 0.1--0.5
+    \item \textbf{Decision threshold:} 0.4297
+\end{itemize}
+
+\vspace{0.2cm}
+
+\textbf{Note:} The training configuration is kept consistent
+with Demo v2.
+
+\end{frame}
+
+
+%------------------------------------------------------------
+% Slide 2 — Evaluation Results
+%------------------------------------------------------------
+\begin{frame}{Demo v3: Evaluation Results}
+
+\centering
+\small
+
+\begin{tabular}{ccccc}
+    \hline
+    \textbf{Top-$k$} & \textbf{Threshold} &
+    \textbf{Acc} & \textbf{F1} & \textbf{EM} \\
+    \hline
+    3 & 0.4297 & 22.8 & 28.46 & 19.6 \\
+    5 & 0.4297 & 25.8 & 31.17 & 21.6 \\
+    5 & 0.5    & 24.0 & 30.27 & 20.8 \\
+    \textbf{5} & \textbf{0.6} &
+    \textbf{26.0} & \textbf{32.08} & \textbf{22.8} \\
+    5 & 0.7    & 22.6 & 29.21 & 19.8 \\
+    \hline
+\end{tabular}
+
+\vspace{0.3cm}
+
+\textbf{Best configuration:} Top-$k=5$, threshold $=0.6$.
+
+\end{frame}
+
+%------------------------------------------------------------
+% Slide 3 — MuSiQue Benchmark Comparison
+%------------------------------------------------------------
+\begin{frame}{Comparison with Existing Methods on MuSiQue}
+
+\centering
+\tiny
+
+\begin{tabular}{lcc}
+    \hline
+    \textbf{Method} & \textbf{EM} & \textbf{F1} \\
+    \hline
+    No Search & 1.4 & 7.2 \\
+    Vanilla RAG & 5.6 & 11.7 \\
+    Iter-Retgen & 8.2 & 14.8 \\
+    IRCoT & 9.2 & 17.6 \\
+    Search-o1 & 4.4 & 14.0 \\
+    Search-R1 & 24.4 & 32.9 \\
+    R-Search & 25.8 & 34.8 \\
+    R-Search-Tool & 27.2 & 36.6 \\
+    \hline
+    ART Demo 1 (with demonstration) & 11.0 & 19.47 \\
+    ART Demo 2 (top-$k=3$, threshold=0.4297) & 16.8 & 25.04 \\
+    ART Demo 2 (top-$k=5$, threshold=0.4297) & 17.6 & 26.33 \\
+    ART Demo 3 (top-$k=3$, threshold=0.4297) & 19.6 & 28.46 \\
+    ART Demo 3 (top-$k=5$, threshold=0.4297) & 21.6 & 31.17 \\
+    \textbf{ART Demo 3 (top-$k=5$, threshold=0.6)}
+        & \textbf{22.8} & \textbf{32.08} \\
+    \hline
+\end{tabular}
+
+\vspace{0.12cm}
+
+\textbf{Estimated Training Rollout Comparison}
+
+\[
+\begin{aligned}
+\text{ART Demo 3:}\quad
+&0.75 \times 20K = 15K \\
+\text{R-Search:}\quad
+&195 \times 256 \times 5 \approx 249.6K
+\end{aligned}
+\]
+
+\[
+\boxed{
+\text{ART: } \approx 6.0\% \text{ of R-Search}
+}
+\]
+
+\raggedright
+\tiny
+ART: 40\% final layers unfrozen. R-Search uses the same
+training setup for its Search-R1 baseline. Rollout counts are
+estimated from training steps, batch size, and responses per prompt;
+they do not represent unique trajectories. R-Search's parameter
+freezing ratio is not explicitly specified in the inspected code.
+
+\end{frame}
+
+%------------------------------------------------------------
+% Slide — ART Demo 2 vs. Demo 3
+%------------------------------------------------------------
+\begin{frame}{ART Demo 2 vs. Demo 3: Reasoning Comparison}
+
+\scriptsize
+
+\textbf{Question:} What is the birth date of the By Your Side performer?
+
+\vspace{0.1cm}
+
+\begin{columns}[T,onlytextwidth]
+
+    %---------------- DEMO 2 ----------------
+    \begin{column}{0.49\textwidth}
+        \centering
+        \textbf{ART Demo 2}
+        \vspace{0.08cm}
+
+        \begin{block}{}
+            \tiny
+            To determine the birth date of the By Your Side performer, we first need to identify who the performer is. The song "If You Don't Know Me by Now" is mentioned in the document, and it is stated that the song was recorded by the Philly soul musical group Harold Melvin \& the Blue Notes. This establishes that the performer in question is Harold Melvin \& the Blue Notes.
+
+            The document "If You Don't Know Me by Now" provides information about the song, including the group that recorded it, which is Harold Melvin \& the Blue Notes. This confirms that the performer is Harold Melvin \& the Blue Notes.
+
+            The document "Harold Melvin \& the Blue Notes" states that the group was formed in 1969. This indicates that the group was active in the 1970s, which aligns with the information provided in the document "If You Don't Know Me by Now" about the song being released in 1972.
+
+            Next, we need to find the birth date of Harold Melvin. The document "Harold Melvin \& the Blue Notes" provides information about the group, including that it was formed in 1969. This document also mentions that the group was active in the 1970s, which is consistent with the information in the document "If You Don't Know Me by Now" about the song being released in 1972.
+
+            To find the birth date of Harold Melvin, we look at the document "Harold Melvin \& the Blue Notes," which states that the group was formed in 1969. Since the document "Harold Melvin \& the Blue Notes" states that the group was formed in 1969, we can infer that the group's members were likely formed around that time. The document "Harold Melvin \& the Blue Notes" also mentions that the group was active in the 1970s, which is consistent with the information in the document "If You Don't Know Me by Now" about the song being released in 1972.
+
+            To determine the birth date of Harold Melvin, we look at the document "Harold Melvin \& the Blue Notes," which states that the group was formed in 1969. Since the document "Harold Melvin \& the Blue Notes" states that the group was formed in 1969, we can infer that the group's members were likely formed around that time.
+        \end{block}
+    \end{column}
+
+    %---------------- DEMO 3 ----------------
+    \begin{column}{0.49\textwidth}
+        \centering
+        \textbf{ART Demo 3}
+        \vspace{0.08cm}
+
+        \begin{block}{}
+            \tiny
+            To answer this question, we first need to identify the performer of the song "By Your Side." AccordingFrom the retrieved information, "By Your Side" is a song by the English musician James Cottriall. Therefore, James Cottriall is the performer we are looking for.
+
+            Next, we need to determine the birth date of James Cottriall.The document "James Cottriall" states that James Cottriall was born on 1 January 1986. This provides the specific birth date we are seeking.
+
+            \vspace{0.1cm}
+            \textbf{Answer:}
+            \[
+                \boxed{\text{1 January 1986}}
+            \]
+        \end{block}
+    \end{column}
+
+\end{columns}
+
+\end{frame}

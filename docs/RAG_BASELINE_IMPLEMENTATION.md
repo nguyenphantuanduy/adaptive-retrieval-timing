@@ -37,17 +37,29 @@ Defaults are `REVIVE_training/result/baselines/{dataset}/no_rag.jsonl` and `REVI
 
 Every output row preserves the input record including `question`, `golden_answers`, and metadata. It preserves the original ID or supplies ART's zero-based row fallback. The raw continuation is in `pure_art_answer`. ART-compatible fields include `pure_art_queries`, `pure_art_passages` as formatted strings, and an empty `pure_art_retrieval_scores` because these baselines have no ART decision scores. Vanilla RAG also saves structured `retrieved_passages` with the adapter's metadata.
 
-Score raw baseline completions with the baseline scorer.
+Score the five result files currently available from the repository root.
 
 ```powershell
+python -m REVIVE_training.evaluate_baseline --filename REVIVE_training/result/baselines/2wikimultihopqa/no_rag.jsonl
+python -m REVIVE_training.evaluate_baseline --filename REVIVE_training/result/baselines/2wikimultihopqa/vanilla_rag_top5.jsonl
+python -m REVIVE_training.evaluate_baseline --filename REVIVE_training/result/baselines/hotpotqa/no_rag.jsonl
+python -m REVIVE_training.evaluate_baseline --filename REVIVE_training/result/baselines/musique/no_rag.jsonl
 python -m REVIVE_training.evaluate_baseline --filename REVIVE_training/result/baselines/musique/vanilla_rag_top5.jsonl
 ```
 
-The baseline scorer passes the entire `pure_art_answer` to Acc, F1 and EM without stripping whitespace or extracting answer tags. Metric-level normalization still applies. This follows the baseline branch in R-Search. Keep using the ART scorer for ART outputs. The example writes `REVIVE_training/metrics/baselines/musique/vanilla_rag_top5_metrics.json` and refuses to overwrite an existing metrics file. Use a fresh output path to keep runs from the earlier FlashRAG protocol separate. [Official baseline scoring](https://github.com/QingFei1/R-Search/blob/main/src/eval/main.py#L164-L177)
+When the HotpotQA Vanilla RAG result arrives, run:
+
+```powershell
+python -m REVIVE_training.evaluate_baseline --filename REVIVE_training/result/baselines/hotpotqa/vanilla_rag_top5.jsonl
+```
+
+The scorer removes only the literal text/chat-control tokens `<|im_end|>`, `<|endoftext|>`, and `<|im_start|>` from predictions in memory. These match the text-control entries in the Qwen2.5-3B-Instruct tokenizer configuration. It leaves the raw JSONL, ordinary text, punctuation, whitespace, and answer tags intact. It passes the cleaned string to ART's existing Acc, F1 and EM functions, which still apply their normal metric-level normalization.
+
+Each command scores one file independently and writes `REVIVE_training/metrics/baselines/{dataset}/{variant}_metrics.json`. A missing input produces a CLI error without writing metrics. Existing metrics files are preserved. Move an earlier metrics file aside if you want to save a new score for the same input.
 
 ## Validation
 
-The protocol update is covered by `python -m unittest test.test_rag_baselines`. The tests verify literal prompt text, ranked reference whitespace, chat wrapping, question preprocessing and raw input to all three metrics. The following checks were run during the initial baseline implementation.
+Run `python -m unittest test.test_rag_baselines` for prompt, output and scoring regression tests. Scoring cases cover clean text, multiple delimiters, raw answer-tag preservation and a missing input. The following checks were run during the initial baseline implementation.
 
 - Syntax, imports and both help commands passed in the project virtual environment.
 - Loaded 500 local MuSiQue and 500 local HotpotQA records with the real loaders. The 2Wiki parser and dispatch were checked with a one-record fixture because the upstream test file was absent locally and the public file could not be inspected.

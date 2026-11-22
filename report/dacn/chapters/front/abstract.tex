@@ -1,0 +1,9 @@
+\chapter*{Tóm tắt}
+\addcontentsline{toc}{chapter}{Tóm tắt}
+Trong Multi-hop Question Answering (Multi-hop QA), bằng chứng cần thiết thường phụ thuộc vào kết quả của các bước suy luận trung gian. Retrieval-Augmented Generation (RAG) với lịch truy hồi cố định có thể bỏ sót bằng chứng hoặc thực hiện những lượt tìm kiếm không cần thiết. Đồ án khảo sát khả năng học thời điểm truy hồi thích ứng từ sự đánh đổi giữa Language Modeling Loss (LM Loss) và retrieval regularization, không cần nhãn trực tiếp cho từng quyết định truy hồi hay Reinforcement Learning.
+
+Adaptive Retrieval Timing (ART) kết hợp Decision Head với Attention Mixing. Quy trình Collect--Replay cho phép truyền gradient từ hàm mục tiêu đến Decision Head trên quỹ đạo đã thu thập. Hai phép thăm dò H1 và H2 khảo sát cách supporting documents, distractor documents và mixing coefficient ảnh hưởng đến LM Loss và gradient, qua đó đánh giá các giả định nền tảng của phương pháp.
+
+ART được đánh giá trên MuSiQue, HotpotQA và 2WikiMultiHopQA, mỗi benchmark gồm 500 câu hỏi. Tại retrieval threshold \(0.4297\), ART tăng F1 lần lượt \(20.92\), \(8.63\) và \(8.49\) điểm phần trăm so với Vanilla RAG. Threshold sweep cho thấy sự đánh đổi giữa chất lượng trả lời và số truy vấn. Kết quả này mô tả hiệu quả ở cấp hệ thống, bổ sung cho bằng chứng về tín hiệu học từ Attention Mixing.
+
+\medskip\noindent\textbf{Từ khóa:} Adaptive Retrieval Timing, Multi-hop Question Answering, Retrieval-Augmented Generation, Attention Mixing, Collect--Replay.

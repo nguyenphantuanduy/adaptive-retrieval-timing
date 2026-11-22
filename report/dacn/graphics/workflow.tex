@@ -1,0 +1,12 @@
+\begin{tikzpicture}[>=stealth, box/.style={draw,rounded corners,align=center,text width=3.3cm,inner sep=4pt,font=\small}]
+\node[box] (teacher) at (0,2) {Câu hỏi và\\đích giáo viên};
+\node[box] (collect) at (4.3,2) {Thu thập, khám phá\\tìm kiếm rời rạc};
+\node[box] (replay) at (8.6,2) {Phát lại tiền tố\\tính mất mát và gradient};
+\node[box] (decode) at (0,0) {Tiền nạp hoặc\\biên câu khi sinh};
+\node[box] (gate) at (4.3,0) {So ngưỡng và\\kiểm tra truy vấn};
+\node[box] (insert) at (8.6,0) {Truy hồi nếu hợp lệ\\chèn, cập nhật KV};
+\draw[->] (teacher)--(collect);
+\draw[->] (collect)--(replay);
+\draw[->] (decode)--(gate);
+\draw[->] (gate)--(insert);
+\end{tikzpicture}

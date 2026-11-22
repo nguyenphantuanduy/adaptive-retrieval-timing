@@ -1,0 +1,12 @@
+\begin{tikzpicture}[>=stealth,every node/.style={font=\small},box/.style={draw,rounded corners,align=center,inner sep=5pt}]
+\node[box] (state) at (0,2.5) {Trạng thái chung\\chiếu \(Q,K,V\)};
+\node[box] (plus) at (-2.5,1.25) {\(A_+\)\\RoPE và mặt nạ nhân quả};
+\node[box] (minus) at (2.5,1.25) {\(A_-\)\\hiệu chỉnh RoPE, che đoạn mới};
+\node[box] (mix) at (0,0) {\(dA_++(1-d)A_-\)};
+\node[box] (out) at (0,-1.15) {Nhân \(V_+\), chiếu đầu ra};
+\draw[->] (state) -- (plus);
+\draw[->] (state) -- (minus);
+\draw[->] (plus) -- (mix);
+\draw[->] (minus) -- (mix);
+\draw[->] (mix) -- (out);
+\end{tikzpicture}

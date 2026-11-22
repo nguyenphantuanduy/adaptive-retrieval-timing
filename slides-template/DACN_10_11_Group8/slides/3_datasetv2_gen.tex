@@ -1,0 +1,218 @@
+% ============================================================
+% SECTION — DATASET V2 GENERATION
+% ============================================================
+\section{Dataset v2 Generation}
+
+%------------------------------------------------------------
+% Slide 1 — Dataset Generation Pipeline
+%------------------------------------------------------------
+\begin{frame}{Dataset v2 Generation Pipeline}
+
+\centering
+\small
+
+\begin{columns}[c,onlytextwidth]
+
+    \begin{column}{0.38\textwidth}
+        \begin{block}{Handcrafted Demonstrations}
+            \centering
+            4 demonstrations\\
+            (including Insufficient Evidence)
+        \end{block}
+
+        \vspace{0.15cm}
+
+        \begin{block}{Revised Instruction Rules}
+            \centering
+            Dataset answer and instructions\\
+            as supplementary references
+        \end{block}
+    \end{column}
+
+    \begin{column}{0.08\textwidth}
+        \centering
+        {\Large $\left.\begin{matrix}\\[0.8cm]\end{matrix}\right\}$}
+        {\Large $\longrightarrow$}
+    \end{column}
+
+    \begin{column}{0.22\textwidth}
+        \begin{block}{Teacher Model}
+            \centering
+            \textbf{Qwen3-8B}
+        \end{block}
+    \end{column}
+
+    \begin{column}{0.08\textwidth}
+        \centering
+        {\Large $\longrightarrow$}
+    \end{column}
+
+    \begin{column}{0.20\textwidth}
+        \begin{block}{Output}
+            \centering
+            Teacher Generation
+        \end{block}
+    \end{column}
+
+\end{columns}
+
+\end{frame}
+
+
+%------------------------------------------------------------
+% Slide 2 — Handcrafted Demonstration
+%------------------------------------------------------------
+\begin{frame}{Handcrafted Demonstration Example}
+
+\scriptsize
+
+\textbf{Question:}
+
+Who is the spouse of the Green performer?
+
+\vspace{0.15cm}
+
+\textbf{Reasoning:}
+
+To answer this question, we first need to identify who the performer
+of Green is. According to the document ``Green (Steve Hillage album),''
+Green is an album by the British musician Steve Hillage. Therefore,
+Steve Hillage is the performer we are looking for.
+
+\vspace{0.1cm}
+
+Next, we need to determine who Steve Hillage's spouse is. The document
+``Miquette Giraudy'' describes Miquette Giraudy as Steve Hillage's
+partner. Since this document is a personal biography describing her
+professional background and personal association with Steve Hillage,
+we interpret ``partner'' in this context as referring to a romantic
+or life partner rather than a business or professional partner.
+Based on this contextual interpretation, we assume that Miquette
+Giraudy is Steve Hillage's spouse. Therefore, the answer is
+Miquette Giraudy.
+
+\vspace{0.1cm}
+
+\begin{center}
+    \textbf{\texttt{<answer> Miquette Giraudy </answer>}}
+\end{center}
+
+\end{frame}
+
+
+%------------------------------------------------------------
+% Slide 3 — Teacher Instruction Rules
+%------------------------------------------------------------
+\begin{frame}{Teacher Instruction Rules}
+
+\small
+
+\begin{block}{Dataset Answer}
+    Dataset answers are provided only as supplementary reference
+    information. Do not trust them unconditionally or use them as
+    definitive evidence. Independently evaluate their correctness
+    against the provided passages, prior knowledge, and reasoning.
+    Never mention or refer to dataset answers in your reasoning
+    or final answer.
+\end{block}
+
+\vspace{0.2cm}
+
+\begin{block}{Reasoning Instructions}
+    Reasoning instructions are human-provided supplementary guidance,
+    not mandatory procedures or authoritative evidence. You may follow,
+    adapt, reorder, partially use, deviate from, or reject them as
+    appropriate. Independently determine the most appropriate reasoning
+    approach. Always prioritize factual accuracy and evidential support
+    over adherence to the suggested instructions.
+\end{block}
+
+\end{frame}
+
+%------------------------------------------------------------
+% Slide 4 — Teacher Generation Comparison
+%------------------------------------------------------------
+\begin{frame}{Teacher Generation: Old vs. New}
+
+\tiny
+
+\textbf{Question:}
+
+What followed the person who lost his head in the French Revolution
+in the country who became allies with America after the Battle of Saratoga?
+
+\vspace{0.15cm}
+
+\begin{columns}[T,onlytextwidth]
+
+%---------------- OLD ----------------
+\begin{column}{0.46\textwidth}
+
+\begin{block}{Old Teacher Output}
+The person who lost his head in the French Revolution was Louis XVI,
+as stated in the document ``Execution of Louis XVI.'' After his execution,
+the country that became allies with America following the Battle of
+Saratoga was France, as detailed in the document ``Battles of Saratoga.''
+The individual who administered capital punishment, including the
+execution of Louis XVI, was Charles-Henri Sanson, as mentioned in the
+document ``Charles-Henri Sanson.'' Following the execution of Louis XVI,
+the country of France, which had become allies with America after the
+Battle of Saratoga, was governed by the First French Republic.
+
+\vspace{0.1cm}
+
+\begin{center}
+    \textbf{\texttt{<answer> First French Republic </answer>}}
+\end{center}
+\end{block}
+
+\end{column}
+
+%---------------- ARROW ----------------
+\begin{column}{0.08\textwidth}
+\centering
+\vspace{3.2cm}
+{\Large $\Longrightarrow$}
+\end{column}
+
+%---------------- NEW ----------------
+\begin{column}{0.46\textwidth}
+
+\begin{block}{New Teacher Output}
+To answer this question, we first need to identify the person who lost
+his head in the French Revolution. According to the document
+``Execution of Louis XVI,'' Louis XVI was executed by guillotine on
+21 January 1793, making him the individual who lost his head during
+the French Revolution.
+
+Next, we need to determine the country that became allies with America
+after the Battle of Saratoga. The document ``Battles of Saratoga''
+explains that following the Battle of Saratoga, King Louis XVI of France
+decided to enter into negotiations with the Americans, leading to a
+formal Franco-American alliance. Therefore, the country in question
+is France.
+
+Finally, we need to determine what followed the person who lost his
+head (Louis XVI) in the context of the country that became allies
+with America (France). The document ``Charles-Henri Sanson'' states
+that Charles-Henri Sanson was the royal executioner of France during
+the reign of King Louis XVI and later became the High Executioner of
+the First French Republic. This indicates that the First French
+Republic succeeded the monarchy in France, which was directly
+associated with the execution of Louis XVI. Therefore, the entity
+that followed the person who lost his head in the French Revolution
+in the context of the country that became allies with America is
+the First French Republic.
+
+\vspace{0.1cm}
+
+\begin{center}
+    \textbf{\texttt{<answer> First French Republic </answer>}}
+\end{center}
+\end{block}
+
+\end{column}
+
+\end{columns}
+
+\end{frame}

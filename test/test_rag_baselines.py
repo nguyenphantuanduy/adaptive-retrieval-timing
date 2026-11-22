@@ -9,7 +9,7 @@ from REVIVE_training.baseline_generation import (
     render_prompt,
     validate_output,
 )
-from REVIVE_training.evaluate_baseline import score_baseline
+from REVIVE_training.evaluate_baseline import clean_prediction, main, score_baseline
 
 
 class BaselineProtocolTests(unittest.TestCase):
@@ -68,6 +68,35 @@ class BaselineProtocolTests(unittest.TestCase):
             for metric in (acc, f1, em):
                 metric.assert_called_once_with([response], [["Paris"]])
         self.assertEqual(score_baseline(results)["metrics"]["EM"], 0.0)
+
+    def test_qwen_control_tokens_are_removed_before_scoring(self):
+        response = "King Gojong<|im_end|>"
+        self.assertEqual(clean_prediction(response), "King Gojong")
+        result = {"pure_art_answer": response, "golden_answers": ["King Gojong"]}
+        self.assertEqual(
+            score_baseline([result])["metrics"],
+            {"Acc": 100.0, "F1": 100.0, "EM": 100.0},
+        )
+        self.assertEqual(result["pure_art_answer"], response)
+
+    def test_only_exact_control_tokens_are_removed(self):
+        answer = "  <answer>Who? A < B & C.</answer> <|custom|>\n"
+        self.assertEqual(clean_prediction(answer), answer)
+        self.assertEqual(
+            clean_prediction("<|im_start|>A<|im_end|>: B!<|endoftext|><|im_end|>"),
+            "A: B!",
+        )
+
+    def test_missing_result_reports_a_cli_error(self):
+        with (
+            patch("sys.argv", ["evaluate_baseline", "--filename", "missing_baseline.jsonl"]),
+            patch("REVIVE_training.evaluate_baseline.load_results", side_effect=FileNotFoundError),
+            patch("sys.stderr") as stderr,
+            self.assertRaises(SystemExit) as error,
+        ):
+            main()
+        self.assertEqual(error.exception.code, 2)
+        self.assertIn("baseline result not found", stderr.write.call_args.args[0])
 
 
 class BaselineOutputTests(unittest.TestCase):

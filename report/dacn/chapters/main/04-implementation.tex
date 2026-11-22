@@ -1,0 +1,31 @@
+\chapter{Thiết kế và hiện thực hệ thống}
+\label{chap:implementation}
+\section{Yêu cầu hệ thống}
+Hệ thống gồm bộ sinh tùy biến theo Qwen2, bộ truy hồi ngoài mô hình, bộ chia câu trực tuyến và trình điều phối huấn luyện. Kho đoạn và chỉ mục theo từng bộ dữ liệu phải có cùng số hàng; mỗi kết quả FAISS trỏ đến đoạn ở hàng tương ứng. Bộ truy hồi mã hóa truy vấn có tiền tố E5, gộp trung bình theo mặt nạ, chuẩn hóa \(L_2\), rồi tìm kiếm bằng vectơ float32 trên CPU. Đoạn được xếp theo hạng và đóng gói thành quan sát cho Decoder.
+\section{Kiến trúc hệ thống}
+\subsection{Chuẩn bị chuỗi và tập tham số}
+Câu hỏi được định dạng theo mẫu hội thoại. Đích giáo viên và EOS được mã hóa riêng; nhãn của câu hỏi và của token quan sát chèn thêm mang giá trị bỏ qua \(-100\). Bộ nạp kiểm tra kiểu chuỗi và loại đích rỗng. Theo tác giả, checkpoint ART đánh giá được huấn luyện \(0.75\) epoch. Luật đóng băng chỉ mở 15 lớp cuối trong 36 lớp và Decision Head; các lớp còn lại vẫn tham gia lan truyền thuận. Vi lô chứa một mẫu và tích lũy gradient 32 bước.
+\begin{figure}[!t]
+\centering
+\includegraphics[width=.87\linewidth]{graphics/workflow-figure.pdf}
+\caption{Luồng thu thập và phát lại khi huấn luyện, cùng vị trí ra quyết định khi suy luận. Đường đi qua tìm kiếm rời rạc không mang gradient.}
+\label{fig:workflow}
+\end{figure}
+
+\section{Hiện thực}
+\subsection{Collect--Replay khi training}
+\Cref{fig:workflow} đặt vòng thu thập và phát lại cạnh vòng suy luận. Hai vòng dùng bộ truy hồi và kỹ thuật chèn quan sát giống nhau về vai trò, nhưng chỉ pha thu thập dùng khám phá và chỉ pha phát lại tính gradient.
+\begin{enumerate}
+\item Nạp câu hỏi, lấy điểm ban đầu, sau đó đưa từng khối token giáo viên đến Decoder. Tại các biên đủ điều kiện, so sánh điểm với ngưỡng; ở các bước sau, xác suất khám phá có thể kích hoạt truy hồi. Xác suất tăng sau lượt không tìm và giảm sau lượt tìm trong các giới hạn đã cấu hình.
+\item Khi truy hồi, lưu ảnh chụp tiền tố, thực hiện truy vấn rời rạc, thêm quan sát cùng nhãn bỏ qua và cập nhật vùng tài liệu. Trình huấn luyện chạy pha này trong \texttt{no\_grad}.
+\item Phát lại các tiền tố đã lưu với gradient và không dùng KV Cache. Tính lại điểm từ trạng thái cuối, lấy phần logits mới của từng tiền tố rồi ghép theo thứ tự trước khi dịch một vị trí để tính \cref{eq:loss}.
+\end{enumerate}
+Pha phát lại giữ nguyên danh tính tài liệu nhưng cho điểm được tính lại nhận gradient qua chú ý và số hạng phạt. Nếu không có điểm nào được dùng hoặc tính phạt theo đường khả vi, lớp giải mã được mở vẫn có thể học từ LM Loss mà không có gradient tới Decision Head. Mã có trường hợp kết thúc chỉ ghi quyết định mà không gọi tìm kiếm; nhánh phạt cuối có thể cộng lại điểm trước. Đường tạo ảnh chụp cuối còn phụ thuộc vào bộ đệm câu. Chưa đo tần suất các trường hợp này trong chạy lịch sử.
+\subsection{Inference tự hồi quy}
+\begin{enumerate}
+\item Tiền nạp câu hỏi và khởi tạo hai KV Cache. Ở các bước sau, đưa token mới vào và khôi phục mặt nạ nội bộ đã bao gồm các quan sát.
+\item Chỉ tính điểm ứng viên ở lần tiền nạp hoặc khi bộ tách trực tuyến báo biên câu. Nếu \(s_t\geq\tau\), lấy câu hoàn chỉnh gần nhất, hoặc câu hỏi gốc khi chưa có câu hoàn chỉnh. Từ chối truy vấn chứa dấu hiệu câu trả lời hoặc quan sát bị chặn.
+\item Gọi bộ truy hồi, chạy các token quan sát qua Decoder với vùng tài liệu và điểm đang hoạt động, rồi cập nhật vùng mới. Quan sát có thể thay đổi logits của token sinh kế tiếp. Không chép các token quan sát nội bộ vào câu trả lời trả ra.
+\item Sau khi chèn, đồng bộ nhánh KV thứ hai từ nhánh có quan sát. Sau đó mỗi lớp tiếp tục cập nhật khóa theo hệ vị trí của nhánh tương ứng. Mặt nạ mới chỉ che quan sát vừa chèn. Nếu cổng bác bỏ một ứng viên, giữ vùng tài liệu và điểm đang hoạt động.
+\end{enumerate}
+Bộ tách câu có thể báo biên dựa trên một token nhìn trước; câu truy vấn được lấy từ phần đã xác nhận ổn định của văn bản sinh. Hiện thực suy luận dùng một mẫu mỗi lượt. Mã hiện tại không bật khám phá hay hạn ngạch truy hồi suy luận. Danh sách điểm gồm các ứng viên bị bác bỏ; danh sách truy vấn được ghi ngay trước lời gọi tìm kiếm. Vì vậy hai danh sách có mẫu số khác nhau.

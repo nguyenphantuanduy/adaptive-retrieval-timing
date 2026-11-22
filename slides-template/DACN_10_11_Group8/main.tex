@@ -1,0 +1,214 @@
+\documentclass[aspectratio=169]{beamer}
+
+\usetheme{Madrid}
+\usefonttheme{structurebold}
+\usefonttheme[onlymath]{serif}
+
+%------------------------------------------------------------
+% Colors and Beamer settings
+%------------------------------------------------------------
+
+\definecolor{BKTemplate}{rgb}{0.11765, 0.30588, 0.47451}
+\usecolortheme[named=BKTemplate]{structure}
+\setbeamercolor{title}{fg=BKTemplate,bg=}
+\setbeamertemplate{caption}[numbered]
+
+%------------------------------------------------------------
+% Packages
+%------------------------------------------------------------
+
+% Vietnamese support
+\usepackage{fontspec}
+\usepackage{polyglossia}
+\setmainlanguage{vietnamese}
+\setotherlanguage{english}
+
+\usepackage{url}
+\usepackage{booktabs}
+\usepackage{amsfonts}
+\usepackage{nicefrac}
+\usepackage{microtype}
+\usepackage{mathtools}
+\usepackage{multicol}
+\usepackage{comment}
+\usepackage{forest}
+\usepackage[linesnumbered, ruled]{algorithm2e}
+\usepackage{algorithmic}
+\usepackage{xcolor}
+\usepackage{colortbl}
+\usepackage{graphicx}
+\usepackage{diagbox}
+\usepackage{tikz}
+\usepackage{subcaption}
+\usepackage{amsmath}
+\usepackage{dsfont}
+\usepackage{stmaryrd}
+
+\usepackage[
+    style=authortitle,
+    backend=bibtex
+]{biblatex}
+
+\addbibresource{thesiscite.bib}
+
+%------------------------------------------------------------
+% Custom commands
+%------------------------------------------------------------
+
+\renewcommand{\footnotesize}{\tiny}
+
+\newcommand{\mathbi}[1]{\boldsymbol{#1}}
+
+\newtheorem{proposition}{Mệnh đề}
+
+%------------------------------------------------------------
+% Title page information
+%------------------------------------------------------------
+
+\title[Thời điểm truy hồi thích ứng]
+{
+    \textbf{\Large Adaptive Retrieval Timing}\\[0.18cm]
+    \textbf{\Large Learning When to Retrieve}\\[0.18cm]
+    \textbf{\Large without Direct Decision Supervision}\\[0.18cm]
+    \textbf{\Large or Reinforcement Learning}
+}
+
+\subtitle{}
+
+\author[Nguyễn Phan Tuấn Duy]
+{
+    Giảng viên hướng dẫn: PGS. TS. Quản Thành Thơ\\
+    Sinh viên: Nguyễn Phan Tuấn Duy
+}
+
+\institute[HCMUT]
+{
+    Trường Đại học Bách khoa, Đại học Quốc gia Thành phố Hồ Chí Minh
+}
+
+\date[10/11/2026]
+{Ngày 10 tháng 11 năm 2026}
+
+%============================================================
+% DOCUMENT
+%============================================================
+
+\begin{document}
+
+%============================================================
+% TITLE PAGE
+%============================================================
+
+\setbeamertemplate{background canvas}{
+    \includegraphics[
+        width=\paperwidth,
+        height=\paperheight
+    ]{images/FrontBackground.pdf}
+}
+
+\begin{frame}[plain]
+
+    \setbeamerfont{author}{
+        size=\fontsize{8}{10}\selectfont
+    }
+
+    \setbeamerfont{institute}{
+        size=\fontsize{7}{9}\selectfont
+    }
+
+    \setbeamerfont{date}{
+        size=\fontsize{8}{10}\selectfont
+    }
+
+    \vspace*{0.45cm}
+
+    \titlepage
+
+\end{frame}
+
+%============================================================
+% NORMAL BACKGROUND
+%============================================================
+
+\setbeamertemplate{background canvas}{
+    \includegraphics[
+        width=\paperwidth,
+        height=\paperheight
+    ]{images/Background.pdf}
+}
+
+%============================================================
+% TABLE OF CONTENTS
+%============================================================
+
+\begin{frame}
+    \frametitle{Nội dung trình bày}
+    \tableofcontents
+\end{frame}
+
+%============================================================
+% SLIDES
+%============================================================
+
+\input{slides/0_introduction}
+% \begin{frame}{Attention Mixing Module}
+%     \centering
+%     \resizebox{0.98\textwidth}{!}{%
+%         \input{diagrams/attention_mixing}
+%     }
+% \end{frame}
+\input{slides/1_failure_case_analysis}
+\input{slides/2_dataset_analysis}
+\input{slides/3_datasetv2_gen}
+\input{slides/4_demov3}
+\input{slides/5_problem}
+\input{slides/6_references}
+% \input{slides/7_issue}
+% \input{slides/8_references}
+
+%============================================================
+% THANK YOU
+%============================================================
+
+\begin{frame}[plain]
+
+    \begin{center}
+
+        \vspace*{2.2cm}
+
+        {\usebeamercolor[fg]{structure}
+        \fontsize{28}{34}\selectfont
+        \textbf{Xin cảm ơn}}
+
+        \vspace{0.6cm}
+
+        {\large
+        Cảm ơn Thầy và các bạn đã lắng nghe.
+        }
+
+        \vspace{1.2cm}
+
+        \rule{0.45\textwidth}{0.5pt}
+
+        \vspace{0.35cm}
+
+        {\normalsize
+        \textbf{Adaptive Retrieval Timing}\\
+        Learning When to Retrieve without Direct Decision Supervision
+        or Reinforcement Learning
+        }
+
+        \vspace{0.8cm}
+
+        {\small
+        Nguyễn Phan Tuấn Duy\\
+        Giảng viên hướng dẫn: PGS. TS. Quản Thành Thơ
+        }
+
+    \end{center}
+
+\end{frame}
+
+%============================================================
+
+\end{document}
