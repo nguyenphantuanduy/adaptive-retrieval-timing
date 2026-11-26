@@ -3,8 +3,10 @@
 import argparse
 import json
 from pathlib import Path
+from tempfile import NamedTemporaryFile
 
 import torch
+from tqdm.auto import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer, GenerationConfig, set_seed
 
 from REVIVE_training.evaluate_art_pure import acc_score, compute_exact, extract_answer, f1_scorer
@@ -68,6 +70,34 @@ def load_checkpoint(source, revision, dtype, local_files_only=False):
     return model, tokenizer, resolved_revision
 
 
+def generated_text(tokenizer, token_ids, eos_ids):
+    # Batched generate pads finished sequences. Keep the first EOS, as in a
+    # single-sample run, and discard the batch padding after it.
+    for index, token_id in enumerate(token_ids):
+        if token_id in eos_ids:
+            token_ids = token_ids[:index + 1]
+            break
+    return tokenizer.decode(token_ids, skip_special_tokens=False)
+
+
+def save_results(output, rows, metrics):
+    output.mkdir(parents=True, exist_ok=True)
+    staged = []
+    try:
+        for filename in ("results.jsonl", "metrics.json"):
+            with NamedTemporaryFile(mode="w", encoding="utf-8", dir=output, delete=False) as stream:
+                staged.append((Path(stream.name), output / filename))
+                if filename == "results.jsonl":
+                    stream.writelines(json.dumps(row, ensure_ascii=False) + "\n" for row in rows)
+                else:
+                    json.dump(metrics, stream, indent=2)
+        for temporary, destination in staged:
+            temporary.replace(destination)
+    finally:
+        for temporary, _ in staged:
+            temporary.unlink(missing_ok=True)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dataset", choices=DATASETS)
@@ -78,6 +108,7 @@ def main():
     parser.add_argument("--local-files-only", action="store_true", help="Load from disk or the local Hub cache only")
     parser.add_argument("--output-dir", type=Path, default=Path("sft-norag-evaluation"))
     parser.add_argument("--limit", type=int, choices=range(1, 500), metavar="1..499")
+    parser.add_argument("--batch-size", type=int, default=32, help="Questions per generation batch (default: 32)")
     parser.add_argument("--cpu-smoke", action="store_true", help="Test generation and scoring with a small local CPU model")
     args = parser.parse_args()
     if args.summary:
@@ -85,6 +116,8 @@ def main():
         return
     if not args.dataset:
         parser.error("--dataset is required for generation")
+    if args.batch_size < 1:
+        parser.error("--batch-size must be positive")
     source, samples = read_samples(args.dataset)
     if args.cpu_smoke and not args.limit:
         parser.error("--cpu-smoke requires --limit")
@@ -96,35 +129,40 @@ def main():
     if args.limit:
         output = output / f"smoke-{args.limit}"
         samples = samples[:args.limit]
-    if (output / "results.jsonl").exists() or (output / "metrics.json").exists():
-        parser.error("Evaluation outputs already exist. Choose another --output-dir.")
     model, tokenizer, resolved_revision = load_checkpoint(
         args.model, args.revision, torch.float32 if args.cpu_smoke else torch.bfloat16, args.local_files_only
     )
     model = model.to(device).eval()
+    tokenizer.padding_side = "left"
+    if tokenizer.pad_token_id is None:
+        tokenizer.pad_token = tokenizer.eos_token
     generation = GenerationConfig(do_sample=True, temperature=0.1, top_p=0.9, top_k=0,
                                   repetition_penalty=1.0, max_new_tokens=2 if args.cpu_smoke else 1024, num_beams=1,
                                   num_return_sequences=1, eos_token_id=model.generation_config.eos_token_id,
                                   pad_token_id=tokenizer.pad_token_id)
+    eos = generation.eos_token_id
+    eos_ids = set(eos if isinstance(eos, (tuple, list)) else [eos])
     set_seed(44)
     rows = []
-    with torch.inference_mode():
-        for sample in samples:
-            inputs = tokenizer(render_prompt(tokenizer, sample["question"]),
+    with torch.inference_mode(), tqdm(total=len(samples), desc=f"{arm} / {args.dataset}", unit="sample") as progress:
+        for start in range(0, len(samples), args.batch_size):
+            batch = samples[start:start + args.batch_size]
+            prompts = [render_prompt(tokenizer, sample["question"]) for sample in batch]
+            inputs = tokenizer(prompts, padding=True, return_attention_mask=True,
                                add_special_tokens=False, return_tensors="pt").to(device)
             response = model.generate(**inputs, generation_config=generation)
-            raw = tokenizer.decode(response[0, inputs.input_ids.shape[1]:], skip_special_tokens=False)
-            answer, has_tag = extract_answer(raw)
-            rows.append({**sample, "pure_art_answer": raw, "extracted_answer": answer,
-                         "has_answer_tag": has_tag, "pure_art_queries": [], "pure_art_passages": []})
+            completions = response[:, inputs.input_ids.shape[1]:].tolist()
+            for sample, token_ids in zip(batch, completions, strict=True):
+                raw = generated_text(tokenizer, token_ids, eos_ids)
+                answer, has_tag = extract_answer(raw)
+                rows.append({**sample, "pure_art_answer": raw, "extracted_answer": answer,
+                             "has_answer_tag": has_tag, "pure_art_queries": [], "pure_art_passages": []})
+            progress.update(len(batch))
     metrics = score_rows(rows)
     metrics.update(source=str(source), model=args.model, revision=resolved_revision,
-                   seed=44, generation=generation.to_dict(), smoke_test=args.limit is not None)
-    output.mkdir(parents=True, exist_ok=True)
-    with (output / "results.jsonl").open("x", encoding="utf-8") as stream:
-        stream.writelines(json.dumps(row, ensure_ascii=False) + "\n" for row in rows)
-    with (output / "metrics.json").open("x", encoding="utf-8") as stream:
-        json.dump(metrics, stream, indent=2)
+                   seed=44, batch_size=args.batch_size, generation=generation.to_dict(),
+                   smoke_test=args.limit is not None)
+    save_results(output, rows, metrics)
     print(json.dumps(metrics["metrics"], indent=2))
 
 
