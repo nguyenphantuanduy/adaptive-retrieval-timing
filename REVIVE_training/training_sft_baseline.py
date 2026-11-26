@@ -116,12 +116,34 @@ def upload_model(model_dir, metrics_dir):
     manifest = json.loads((model_dir / "training_configuration.json").read_text(encoding="utf-8"))
     if "optimizer_updates_total" not in manifest:
         raise ValueError("Smoke checkpoints cannot be published as the completed baseline")
+    required = {"config.json", "generation_config.json", "tokenizer_config.json", "tokenizer.json"}
+    index = model_dir / "model.safetensors.index.json"
+    if index.is_file():
+        weight_map = json.loads(index.read_text(encoding="utf-8"))["weight_map"]
+        if not weight_map:
+            raise ValueError("Empty weight map in the model shard index")
+        required.update(weight_map.values())
+    else:
+        required.add("model.safetensors")
+    missing = sorted(name for name in required if not (model_dir / name).is_file())
+    if missing:
+        raise ValueError(f"Incomplete inference checkpoint: missing {', '.join(missing)}")
+    tokenizer_config = json.loads((model_dir / "tokenizer_config.json").read_text(encoding="utf-8"))
+    if not tokenizer_config.get("chat_template") and not (model_dir / "chat_template.jinja").is_file():
+        raise ValueError("Incomplete inference checkpoint: missing the tokenizer chat template")
     results = []
     for dataset in DATASETS:
-        metrics = json.loads((metrics_dir / "sft-norag" / dataset / "metrics.json").read_text(encoding="utf-8"))
-        if metrics["num_samples"] != 500 or metrics["smoke_test"] or Path(metrics["model"]).resolve() != model_dir.resolve():
-            raise ValueError(f"{dataset} metrics do not identify this local final model")
-        scores = [f"{metrics['metrics'][key]:.2f}" for key in ("Acc", "F1", "EM")]
+        metrics_path = metrics_dir / "sft-norag" / dataset / "metrics.json"
+        if not metrics_path.is_file():
+            continue
+        try:
+            metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
+            if metrics["num_samples"] != 500 or metrics["smoke_test"] or Path(metrics["model"]).resolve() != model_dir.resolve():
+                continue
+            scores = [f"{metrics['metrics'][key]:.2f}" for key in ("Acc", "F1", "EM")]
+        except (OSError, ValueError, TypeError, KeyError):
+            print(f"Skipping unreadable or invalid optional metrics: {metrics_path}")
+            continue
         results.append(f"| {dataset} | {' | '.join(scores)} |")
     api = HfApi()
     orgs = api.whoami().get("orgs", [])
@@ -135,9 +157,12 @@ def upload_model(model_dir, metrics_dir):
         "Pure teacher-forced SFT baseline for the ART ablation. Only the final 40% "
         "of decoder blocks (rounded up) are updated. The loss is causal LM cross-entropy "
         "on the original teacher target and EOS.\n\n"
-        "| Dataset | Acc (%) | F1 (%) | EM (%) |\n| --- | ---: | ---: | ---: |\n"
-        + "\n".join(results) + "\n"
     )
+    if results:
+        card += "| Dataset | Acc (%) | F1 (%) | EM (%) |\n| --- | ---: | ---: | ---: |\n"
+        card += "\n".join(results) + "\n"
+    else:
+        card += "Benchmark results will be added after evaluation.\n"
     (model_dir / "README.md").write_text(card, encoding="utf-8")
     print(api.upload_folder(repo_id=HUB_REPO, folder_path=model_dir, repo_type="model"))
 
@@ -152,8 +177,11 @@ def main():
     parser.add_argument("--smoke-test", action="store_true")
     parser.add_argument("--accept-target-markers", action="store_true")
     parser.add_argument("--upload", action="store_true", help="Publish the completed baseline to its own private repo")
+    parser.add_argument("--push-to-hub", action="store_true", help="Upload after successful training and final save")
     parser.add_argument("--metrics-dir", type=Path, default=Path("sft-norag-evaluation"))
     args = parser.parse_args()
+    if args.push_to_hub and (args.upload or args.audit_only or args.smoke_test):
+        parser.error("--push-to-hub requires full training")
     if args.upload:
         upload_model(args.output_dir / "model", args.metrics_dir)
         return
@@ -243,6 +271,8 @@ def main():
         trainer.save_state()
     (output / "model" / "training_configuration.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     print(json.dumps(manifest, indent=2))
+    if args.push_to_hub:
+        upload_model(output / "model", args.metrics_dir)
 
 
 if __name__ == "__main__":

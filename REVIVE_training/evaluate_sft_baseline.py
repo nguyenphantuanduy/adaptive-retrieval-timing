@@ -57,12 +57,25 @@ def write_summary(output_dir):
     print(json.dumps(summary, indent=2))
 
 
+def load_checkpoint(source, revision, dtype, local_files_only=False):
+    model = AutoModelForCausalLM.from_pretrained(
+        source, revision=revision, torch_dtype=dtype, local_files_only=local_files_only
+    )
+    resolved_revision = model.config._commit_hash or revision
+    tokenizer = AutoTokenizer.from_pretrained(
+        source, revision=resolved_revision, local_files_only=local_files_only
+    )
+    return model, tokenizer, resolved_revision
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dataset", choices=DATASETS)
     parser.add_argument("--summary", action="store_true")
-    parser.add_argument("--model", default="sft-norag-training-output/model")
-    parser.add_argument("--revision")
+    parser.add_argument("--model", default="sft-norag-training-output/model",
+                        help="Hugging Face model repository ID or local checkpoint directory")
+    parser.add_argument("--revision", help="Hugging Face branch, tag or commit SHA")
+    parser.add_argument("--local-files-only", action="store_true", help="Load from disk or the local Hub cache only")
     parser.add_argument("--output-dir", type=Path, default=Path("sft-norag-evaluation"))
     parser.add_argument("--limit", type=int, choices=range(1, 500), metavar="1..499")
     parser.add_argument("--cpu-smoke", action="store_true", help="Test generation and scoring with a small local CPU model")
@@ -85,9 +98,10 @@ def main():
         samples = samples[:args.limit]
     if (output / "results.jsonl").exists() or (output / "metrics.json").exists():
         parser.error("Evaluation outputs already exist. Choose another --output-dir.")
-    tokenizer = AutoTokenizer.from_pretrained(args.model, revision=args.revision)
-    model = AutoModelForCausalLM.from_pretrained(args.model, revision=args.revision,
-                                               torch_dtype=torch.float32 if args.cpu_smoke else torch.bfloat16).to(device).eval()
+    model, tokenizer, resolved_revision = load_checkpoint(
+        args.model, args.revision, torch.float32 if args.cpu_smoke else torch.bfloat16, args.local_files_only
+    )
+    model = model.to(device).eval()
     generation = GenerationConfig(do_sample=True, temperature=0.1, top_p=0.9, top_k=0,
                                   repetition_penalty=1.0, max_new_tokens=2 if args.cpu_smoke else 1024, num_beams=1,
                                   num_return_sequences=1, eos_token_id=model.generation_config.eos_token_id,
@@ -104,7 +118,7 @@ def main():
             rows.append({**sample, "pure_art_answer": raw, "extracted_answer": answer,
                          "has_answer_tag": has_tag, "pure_art_queries": [], "pure_art_passages": []})
     metrics = score_rows(rows)
-    metrics.update(source=str(source), model=args.model, revision=model.config._commit_hash or args.revision,
+    metrics.update(source=str(source), model=args.model, revision=resolved_revision,
                    seed=44, generation=generation.to_dict(), smoke_test=args.limit is not None)
     output.mkdir(parents=True, exist_ok=True)
     with (output / "results.jsonl").open("x", encoding="utf-8") as stream:

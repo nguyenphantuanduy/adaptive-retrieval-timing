@@ -58,12 +58,26 @@ python -m REVIVE_training.training_sft_baseline --upload
 
 Generation and scoring run together. Outputs are `sft-norag-evaluation/<arm>/<dataset>/results.jsonl` and `metrics.json`. Smoke tests use separate subdirectories. A JSONL row contains `id`, `question`, `golden_answers`, `pure_art_answer` (raw), `extracted_answer`, `has_answer_tag`, and empty compatibility query/passage arrays. Metrics contain the sample count, extraction counts, scores and generation provenance. `--summary` produces `sft-norag-evaluation/summary.json`.
 
-Authenticate through the existing Hub login or `HF_TOKEN`. The upload checks organization membership and creates a separate private model repo, `adaptive-retrieval-timing/Qwen2.5-3B-Instruct-SFT-NoRAG`. Repository creation enforces write permission and fails if the repo already exists. Upload requires a completed final checkpoint and three full evaluations of the same local model directory. It includes weights, configuration, tokenizer, generation configuration, a model card with measured scores and the training manifest.
+Authenticate through the existing Hub login or `HF_TOKEN`. Run `python -m REVIVE_training.training_sft_baseline --push-to-hub` to upload automatically after successful training and final saves. For an already saved model, use `--upload`. Both commands create the separate private repository `adaptive-retrieval-timing/Qwen2.5-3B-Instruct-SFT-NoRAG`. Repository creation enforces write permission and fails if the repo already exists. Upload includes weights, configuration, tokenizer, generation configuration, the training manifest and a model card. Benchmark results are optional and can be added to the card later.
 
 | Model | MuSiQue Acc/F1/EM | HotpotQA Acc/F1/EM | 2WikiMultiHopQA Acc/F1/EM |
 | --- | --- | --- | --- |
 | Qwen2.5-3B-Instruct, Original No-RAG | Pending matched prompt/scoring | Pending | Pending |
 | Qwen2.5-3B-Instruct, SFT No-RAG | Pending training | Pending | Pending |
 | ART archived default | 25.80 / 31.17 / 21.60 | 42.20 / 48.24 / 37.20 | 48.20 / 46.30 / 37.00 |
+
+### Training and evaluation on separate machines
+
+On machine A, train with `--push-to-hub`. Before upload, the script checks that the final model directory contains the model config, generation config, tokenizer and chat template, and all weight shards. Evaluation scores are optional.
+
+On machine B, clone the repository including the tracked `art-backup/demo-3/result/*/*_art_top5_results.jsonl` files. These supply the exact evaluation samples. No training data, Trainer checkpoint or files from machine A are needed. Authenticate using `hf auth login` or set `HF_TOKEN` with read access to the private model. Run from the repository root with the normal BF16 inference environment.
+
+```bash
+python -m REVIVE_training.evaluate_sft_baseline --dataset musique --model adaptive-retrieval-timing/Qwen2.5-3B-Instruct-SFT-NoRAG
+hf download adaptive-retrieval-timing/Qwen2.5-3B-Instruct-SFT-NoRAG --local-dir checkpoints/sft-norag
+python -m REVIVE_training.evaluate_sft_baseline --dataset musique --model checkpoints/sft-norag --local-files-only --output-dir sft-norag-evaluation-local
+```
+
+Use either loading route. Substitute `hotpotqa` or `2wikimultihopqa` for the other benchmarks. To reproduce the same Hub snapshot, pass its commit SHA via `--revision` on the evaluator or on `hf download`. The direct route uses the resolved model revision for the tokenizer too and records it in the metrics.
 
 The older No-RAG results use a different prompt and raw-response scoring. They are context for the DACN system benchmark. Use the matched Original No-RAG run above to estimate the SFT effect.
