@@ -1,14 +1,16 @@
 \chapter{Mã nguồn và khả năng tái lập}
 \label{app:repro}
 \section{Hiện vật và quy trình}
-Kho GitHub và các địa chỉ Hugging Face được tác giả xác nhận chưa công khai:
-\href{https://github.com/nguyenphantuanduy/adaptive-retrieval-timing.git}{mã nguồn GitHub},
-\href{https://huggingface.co/adaptive-retrieval-timing}{tổ chức Hugging Face} và
-\href{https://huggingface.co/adaptive-retrieval-timing/ART-REVIVE}{checkpoint ART} mà mã đánh giá tham chiếu.
+{\SingleSpacing\raggedright Mã nguồn của đồ án được công khai tại GitHub:\par
+\url{https://github.com/nguyenphantuanduy/adaptive-retrieval-timing}.\par
+Các tài nguyên phục vụ thực nghiệm và đánh giá, bao gồm checkpoint ART, dự kiến được công khai trên Hugging Face tại \url{https://huggingface.co/adaptive-retrieval-timing}.\par}
 
-Bản lưu \path{art-backup/demo-3} chứa dự đoán và metrics ART. Bản ghi baseline nằm ở \path{REVIVE_training/result/baselines}. Tạo bảng, hình và case từ các tệp đã lưu theo lệnh trong \path{docs/report_execution/REVIEW_2026-11-22.md}. Một số checkpoint và chỉ mục lịch sử chưa có revision bất biến trong log.
+Kết quả dự đoán và các chỉ số đánh giá của ART được lưu tại \path{art-backup/demo-3}, trong khi kết quả của các phương pháp đối chứng được lưu tại \path{REVIVE_training/result/baselines}. Các bảng, hình minh họa và ví dụ phân tích được tái tạo từ những tệp kết quả đã lưu, theo quy trình mô tả trong \path{docs/report_execution/REVIEW_2026-11-22.md}.
+
+Một số checkpoint và chỉ mục truy hồi từ các lần thực nghiệm trước chưa được ghi nhận bằng revision bất biến. Do đó, khả năng tái lập chính xác các lần chạy lịch sử vẫn phụ thuộc vào tính sẵn có của những hiện vật tương ứng.
 
 \section{Giới hạn của phép đếm tải huấn luyện}
+{\SingleSpacing
 Với khoảng 20\,000 mẫu và \(0.75\) epoch, phép nhân cho khoảng 15\,000 lượt trình bày đích giáo viên cho student. Phép đếm này dựa trên kích thước tập xấp xỉ; nó chưa bao gồm một lượt sinh đích bằng Qwen3-8B, số token, truy hồi trong Collect và việc chạy lại các tiền tố trong Replay.
 
-Để minh họa một đơn vị đếm khác, cấu hình R-Search công bố tối đa 195 bước, batch 256 và năm phản hồi mỗi prompt\cite{rsearch}. Nếu đủ 195 bước và 256 prompt mỗi bước, phép nhân \(195\times256\times5=249\,600\) cho số phản hồi theo kịch bản. Tỷ số số đếm khoảng \(6\%\) chỉ tái hiện phép tính dưới giả định đó. Lượt trình bày đích và lượt rollout là hai đơn vị khác nhau; rollout còn có generation, tìm kiếm và chấm reward. Thiếu số đo chung về GPU-hours, FLOPs và latency để ước lượng chênh lệch tổng compute.
+Để minh họa một đơn vị đếm khác, cấu hình R-Search công bố tối đa 195 bước, batch 256 và năm phản hồi mỗi prompt\cite{rsearch}. Nếu đủ 195 bước và 256 prompt mỗi bước, phép nhân \(195\times256\times5=249\,600\) cho số phản hồi theo kịch bản. Tỷ số số đếm khoảng \(6\%\) chỉ tái hiện phép tính dưới giả định đó. Lượt trình bày đích và lượt rollout là hai đơn vị khác nhau; rollout còn có generation, tìm kiếm và chấm reward. Thiếu số đo chung về GPU-hours, FLOPs và latency để ước lượng chênh lệch tổng compute.\par}

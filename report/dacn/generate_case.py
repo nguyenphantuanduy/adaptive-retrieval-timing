@@ -6,7 +6,7 @@ REPORT = Path(__file__).resolve().parent
 ROOT = REPORT.parents[1]
 BASE = ROOT / "REVIVE_training/result/baselines/musique"
 ART = ROOT / "art-backup/demo-3/result/musique/rsearch_musique_art_top5_results.jsonl"
-CASE_ID = 27
+CASE_ID = 348
 
 
 def read_case(path):
@@ -30,9 +30,9 @@ def field(name, raw):
     return rf"\textbf{{{name}}}\par\nopagebreak[4]" + "\n" + r"{\small\ttfamily\raggedright" + "\n" + tex(raw) + "\n}\n"
 
 
-def excerpt(raw, end):
-    index = raw.index(end) + len(end)
-    return raw[:index]
+def passages(label, documents):
+    return "".join(field(f"{label}, passage {rank}", raw) + r"\smallskip" + "\n"
+                   for rank, raw in enumerate(documents, 1))
 
 
 def main():
@@ -46,29 +46,19 @@ def main():
     basics = [(label, record["pure_art_answer"]) for label, record in
               (("No-RAG", no), ("Vanilla RAG", vanilla))]
     full = basics + [("ART", art["pure_art_answer"])]
-    first = vanilla["pure_art_passages"][0]
-    start = excerpt(first, "Bindi Irwin as Nim Rusoe")
-    baseline_passage = field("Vanilla RAG, passage 1", start) + r"\emph{[Lược phần còn lại; 4 đoạn khác không hiển thị.]}"
+    baseline_passages = passages("Vanilla RAG", vanilla["pure_art_passages"])
     items = "".join(field(name, raw) for name, raw in basics)
     out = REPORT / "graphics"
     (out / "case-baseline.tex").write_text(
-        r"\setlength{\fboxsep}{6pt}\fbox{\begin{minipage}{.93\linewidth}" + "\n" +
-        common + r"\smallskip\hrule\smallskip" + "\n" + items + r"\smallskip\hrule\smallskip" + "\n" +
-        baseline_passage + "\n" + r"\end{minipage}}", encoding="utf-8")
+        common + items + baseline_passages, encoding="utf-8")
     (out / "case-outputs.tex").write_text(common + "".join(field(name, raw) for name, raw in full),
                                          encoding="utf-8")
-    passages = art["pure_art_passages"]
-    trace = field("Vanilla RAG, query", vanilla["pure_art_queries"][0]) + baseline_passage + "\n\n"
-    trace += field("ART, query 1", art["pure_art_queries"][0])
-    trace += field("ART, query 1, passage 1", excerpt(passages[0], "Bindi Irwin as Nim Rusoe"))
-    trace += r"\emph{[Lược phần còn lại; 4 đoạn khác không hiển thị.]}" + "\n\n"
-    trace += field("ART, query 2", art["pure_art_queries"][1])
-    for rank, end in [(1, "who died in 2006."), (2, "daughter of Steve and Terri Irwin."), (3, None)]:
-        raw = passages[5 + rank - 1]
-        trace += field(f"ART, query 2, passage {rank}", excerpt(raw, end) if end else raw)
-        if end:
-            trace += r"\emph{[Lược phần còn lại của đoạn.]}" + "\n\n"
-    trace += r"\emph{[Đoạn 4 và 5 của lượt 2 không hiển thị.]}"
+    art_passages = art["pure_art_passages"]
+    trace = field("Vanilla RAG, query", vanilla["pure_art_queries"][0]) + baseline_passages
+    for step, query in enumerate(art["pure_art_queries"]):
+        label = f"ART, query {step + 1}"
+        trace += field(label, query)
+        trace += passages(label, art_passages[step * 5:(step + 1) * 5])
     (out / "case-trace.tex").write_text(trace, encoding="utf-8")
 
 

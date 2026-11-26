@@ -1,29 +1,31 @@
 \chapter{Giới thiệu}
 \label{chap:intro}
 \section{Lý do chọn đề tài}
-Trong hỏi đáp nhiều bước, mô hình có thể cần nhận diện một thực thể trung gian trước khi biết nên tìm bằng chứng nào tiếp theo. Một lượt truy hồi từ câu hỏi ban đầu có thể chỉ giải quyết mắt xích đầu tiên. Ngược lại, truy hồi quá thường xuyên đưa thêm distractor documents vào ngữ cảnh và làm tăng tải xử lý. Một pipeline RAG có thể phải thực hiện query rewriting, tạo embedding, vector search trên corpus lớn và reranking. Tùy thiết kế, các bước này có thể làm tăng tài nguyên sử dụng và latency. Đây là động lực nghiên cứu, còn tác động thực tế phụ thuộc vào hiện thực và cấu hình hệ thống.
+Trong hỏi đáp nhiều bước, mô hình có thể cần nhận diện một thực thể trung gian trước khi biết nên tìm bằng chứng nào tiếp theo. Một lượt truy hồi từ câu hỏi ban đầu có thể chỉ giải quyết mắt xích đầu tiên.
+
+Ngược lại, việc truy hồi quá thường xuyên không chỉ làm gia tăng lượng tài liệu gây nhiễu (\emph{distractor documents}) trong ngữ cảnh mà còn tạo thêm chi phí xử lý. Trong một pipeline RAG, mỗi lần truy hồi có thể liên quan đến nhiều công đoạn như \emph{query rewriting}, tạo \emph{embedding}, tìm kiếm vector trên tập dữ liệu lớn và \emph{reranking}. Do đó, các quyết định truy hồi không cần thiết có thể làm gia tăng khối lượng tính toán, mức sử dụng tài nguyên và độ trễ của hệ thống, đồng thời ảnh hưởng đến chất lượng suy luận do sự xuất hiện của các tài liệu không liên quan.
 
 \section{Phát biểu bài toán}
 Cho câu hỏi \(q\), một kho đoạn văn và tiền tố sinh đến thời điểm \(t\), Decoder phải quyết định có cần truy hồi thêm trước khi tiếp tục sinh hay không. Thời điểm truy hồi là vị trí trong chuỗi sinh mà hệ thống đưa ra quyết định này. Ví dụ trong \cref{fig:baseline-case} cho thấy hai hệ thống xử lý cùng câu hỏi MuSiQue.
 
-\begin{center}
-\begin{minipage}{\linewidth}\centering
+\begin{quote}\SingleSpacing
+\captionsetup{hypcap=false}
 \input{graphics/case-baseline.tex}
-\captionof{figure}{Minh họa bài toán trên MuSiQue, ID 27. Câu hỏi, ground truth, raw outputs và đoạn trích lấy từ các bản ghi gốc.}
+\par\nopagebreak[4]
+\captionof{figure}{MuSiQue, ID 348. Câu hỏi, đáp án chuẩn, đầu ra đối chứng và toàn bộ năm đoạn Vanilla RAG theo thứ tự truy hồi.}
 \label{fig:baseline-case}
-\end{minipage}
-\end{center}
+\end{quote}
 
-No-RAG và Vanilla RAG đều không khớp đáp án chuẩn. Đoạn đứng đầu của Vanilla RAG nhận diện Bindi Irwin, một thực thể trung gian mà câu hỏi ban đầu chưa nêu tên. Bài toán đặt ra là học cách quyết định có nên truy hồi tiếp khi trạng thái sinh đã mang thêm thông tin.
+Câu hỏi trong \cref{fig:baseline-case} đòi hỏi hai bước: xác định người đóng Michael Knight, rồi tìm vai của người đó trong \emph{The Young and the Restless}. Đoạn hạng hai của Vanilla RAG xác định David Hasselhoff, nhưng năm đoạn đã lưu không xác nhận vai Snapper Foster. Hai hệ thống đối chứng đều trả lời sai. Ví dụ đặt ra bài toán chọn thời điểm truy hồi tiếp sau khi tìm được thực thể trung gian.
 
 \section{Mục tiêu}
-Câu hỏi nghiên cứu là liệu mô hình có thể học thời điểm truy hồi từ sự đánh đổi giữa LM Loss và retrieval regularization, không cần nhãn trực tiếp hoặc Reinforcement Learning cho các quyết định truy hồi. Đồ án khảo sát tín hiệu nền tảng qua H1/H2, xây dựng phương pháp kết hợp Decision Head, Attention Mixing và Collect--Replay, rồi đánh giá hệ thống trên ba benchmark cùng threshold sweep.
+Câu hỏi nghiên cứu đặt ra là liệu mô hình có thể học được thời điểm truy hồi thích ứng như một hệ quả của quá trình tối ưu hóa sự đánh đổi giữa mục tiêu sinh ngôn ngữ (\emph{LM Loss}) và chi phí truy hồi được biểu diễn thông qua \emph{retrieval regularization}, mà không cần nhãn giám sát trực tiếp về thời điểm truy hồi hoặc Reinforcement Learning. Để trả lời câu hỏi này, đồ án khảo sát các giả thuyết nền tảng H1/H2, xây dựng phương pháp kết hợp Decision Head, Attention Mixing và Collect–Replay, đồng thời đánh giá hiệu quả trên ba bộ dữ liệu benchmark và phân tích độ nhạy theo ngưỡng quyết định (\emph{threshold sweep}).
 
 \section{Phạm vi}
-Đồ án chuyên ngành nghiên cứu thời điểm truy hồi cho Multi-hop QA, từ phép thăm dò đến đánh giá hệ thống. Lựa chọn công cụ và huấn luyện đồng thời retriever--generator thuộc phạm vi nghiên cứu tiếp theo của Đồ án tốt nghiệp.
+Đồ án chuyên ngành tập trung nghiên cứu thời điểm truy hồi thích ứng cho bài toán Multi-hop QA, từ khảo sát các giả thuyết nền tảng đến xây dựng và đánh giá hệ thống. Các hướng mở rộng như lựa chọn công cụ truy hồi và huấn luyện đồng thời retriever–generator có thể được xem xét trong Đồ án tốt nghiệp nhằm đánh giá tính khả thi và tiềm năng cải thiện hiệu quả của phương pháp.
 
 \section{Đóng góp}
-Đồ án chuyên ngành đóng góp một khảo sát thực nghiệm có kiểm soát về ảnh hưởng của bằng chứng và mixing coefficient lên LM Loss và gradient. Về phương pháp, đồ án kết nối điểm quyết định với Attention Mixing khả vi và xây dựng quy trình replay để học điểm này. Về hiện thực, hệ thống tích hợp truy hồi vào vòng sinh tự hồi quy và được so sánh với No-RAG và Vanilla RAG trên các mẫu ghép cặp. Đồ án dùng dữ liệu văn bản từ giáo viên để huấn luyện.
+Đồ án chuyên ngành đóng góp một khảo sát thực nghiệm có kiểm soát về ảnh hưởng của bằng chứng truy hồi và hệ số Attention Mixing đối với LM Loss và gradient. Về phương pháp, đồ án xây dựng cơ chế học quyết định truy hồi thông qua Decision Head và Attention Mixing khả vi, kết hợp quy trình Collect–Replay sử dụng teacher model để tạo quỹ đạo suy luận phục vụ huấn luyện. Về hiện thực, hệ thống tích hợp quyết định truy hồi vào quá trình sinh tự hồi quy và đánh giá trên ba bộ dữ liệu Multi-hop QA, với các phép so sánh ghép cặp cùng No-RAG và Vanilla RAG.
 
 \section{Cấu trúc báo cáo}
 \Cref{chap:background} trình bày nền tảng và công trình liên quan, \cref{chap:method,chap:implementation} mô tả phương pháp và hiện thực, \cref{chap:evaluation} phân tích thực nghiệm, và \cref{chap:conclusion} tổng kết.

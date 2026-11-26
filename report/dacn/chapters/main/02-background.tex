@@ -3,12 +3,13 @@
 \section{Cơ sở lý thuyết}
 Mô hình tự hồi quy phân rã xác suất văn bản thành tích các xác suất token có điều kiện trên tiền tố. Causal Attention giới hạn mỗi vị trí vào các key đã có. KV Cache lưu các phép chiếu key và value của tiền tố để tái sử dụng khi sinh token mới. Một quan sát chèn vào tiền tố có thể thay đổi phân bố của token kế tiếp.
 
-Dense Retriever ánh xạ truy vấn và đoạn văn thành embedding. ART dùng E5 để tạo biểu diễn và FAISS để tìm các hàng lân cận trong chỉ mục\cite{e5,faiss}. Tìm kiếm trả về một danh sách hữu hạn các đoạn từ chỉ mục cố định. Vấn đề nghiên cứu ở đây là chọn thời điểm gọi bộ tìm kiếm trong vòng sinh.
+Dense Retriever ánh xạ truy vấn và đoạn văn thành embedding. ART dùng E5 để tạo biểu diễn và FAISS để tìm các hàng lân cận trong chỉ mục. Tìm kiếm trả về một danh sách hữu hạn các đoạn từ chỉ mục cố định. Vấn đề nghiên cứu ở đây là chọn thời điểm gọi bộ tìm kiếm trong vòng sinh.
 
 \section{Các nghiên cứu liên quan}
-RAG kết hợp mô hình sinh với kho tài liệu ngoài\cite{rag}. Vanilla RAG trong đồ án tìm một lần theo câu hỏi, trước khi sinh. IRCoT xen kẽ suy luận từng bước và tìm kiếm, dùng nội dung đã sinh để cải thiện truy vấn tiếp theo\cite{ircot}. Self-RAG học các reflection token để quyết định truy hồi và đánh giá bằng chứng hoặc câu trả lời\cite{selfrag}. R-Search dùng Reinforcement Learning với nhiều thành phần reward để tối ưu quỹ đạo xen kẽ suy luận và tìm kiếm\cite{rsearch}.
+RAG kết hợp mô hình sinh với kho tài liệu ngoài\cite{rag}. Vanilla RAG trong đồ án tìm một lần theo câu hỏi, trước khi sinh. IRCoT xen kẽ suy luận từng bước và tìm kiếm, dùng nội dung đã sinh để cải thiện truy vấn tiếp theo\cite{ircot}. Self-RAG học các reflection tokens để quyết định truy hồi và đánh giá bằng chứng hoặc câu trả lời\cite{selfrag}. R-Search dùng Reinforcement Learning với nhiều thành phần reward để tối ưu quỹ đạo xen kẽ suy luận và tìm kiếm\cite{rsearch}.
 
 \begin{center}\begin{minipage}{\linewidth}\centering
+\captionsetup{hypcap=false}
 \captionof{table}{Đối chiếu cơ chế chọn thời điểm truy hồi.}
 \label{tab:signals}
 \begin{tabularx}{\linewidth}{@{}p{2.5cm}XX@{}}
@@ -17,7 +18,7 @@ Cách tiếp cận & Quyết định truy hồi & Tín hiệu cho cơ chế quy�
 \midrule
 Vanilla RAG & Một lượt trước khi sinh & Quy tắc cố định \\
 IRCoT & Xen kẽ theo bước suy luận & Bước suy luận đã sinh, theo quy trình xen kẽ \\
-Self-RAG & Sinh reflection token & Giám sát các token phản tư \\
+Self-RAG & Sinh các token điều khiển (\emph{reflection tokens}) & Học có giám sát trên các \emph{reflection tokens} \\
 R-Search & Chính sách xen kẽ suy luận và tìm kiếm & Reward trong Reinforcement Learning \\
 ART & Điểm từ trạng thái Decoder tại các biên ứng viên & LM Loss và retrieval regularization qua Collect--Replay \\
 \bottomrule

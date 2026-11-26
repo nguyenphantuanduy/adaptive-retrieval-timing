@@ -1,12 +1,40 @@
-\begin{tikzpicture}[>=stealth, box/.style={draw,rounded corners,align=center,text width=3.3cm,inner sep=4pt,font=\small}]
-\node[box] (teacher) at (0,2) {Câu hỏi và\\đích giáo viên};
-\node[box] (collect) at (4.3,2) {Thu thập, khám phá\\tìm kiếm rời rạc};
-\node[box] (replay) at (8.6,2) {Phát lại tiền tố\\tính mất mát và gradient};
-\node[box] (decode) at (0,0) {Tiền nạp hoặc\\biên câu khi sinh};
-\node[box] (gate) at (4.3,0) {So ngưỡng và\\kiểm tra truy vấn};
-\node[box] (insert) at (8.6,0) {Truy hồi nếu hợp lệ\\chèn, cập nhật KV};
-\draw[->] (teacher)--(collect);
-\draw[->] (collect)--(replay);
-\draw[->] (decode)--(gate);
-\draw[->] (gate)--(insert);
+\begin{tikzpicture}[
+  x=1cm,y=1cm,>=stealth,
+  card/.style={draw,rounded corners,align=center,text width=3.92cm,
+    inner xsep=4pt,inner ysep=5pt,font=\small},
+  collect/.style={card,draw=blue!55!black,fill=blue!6},
+  replay/.style={card,draw=teal!65!black,fill=teal!7},
+  infer/.style={card,draw=violet!60!black,fill=violet!7},
+  flow/.style={->,semithick}
+]
+\node[collect,fill=blue!18] (ct) at (0,0) {\textbf{1. Collect}};
+\node[replay,fill=teal!18] (rt) at (4.65,0) {\textbf{2. Replay}};
+\node[infer,fill=violet!18] (it) at (9.3,0) {\textbf{3. Inference}};
+
+\node[collect] (c1) at (0,-1.35) {Câu hỏi và chuỗi đích\\Chạy theo segment, no-grad\\Khởi tạo \(p=0.30\)};
+\node[collect] (c2) at (0,-3.45) {Decision Head: điểm \(d_t\)\\Sau câu hỏi: \(d_t\geq\tau\)\\Biên câu nội bộ: ngưỡng\\hoặc exploration với \(p\)};
+\node[collect] (c3) at (0,-5.85) {Còn lượt và đạt điều kiện:\\truy hồi, chèn tài liệu, giảm \(p\).\\Nếu bỏ qua bước này, tăng \(p\).};
+\node[collect] (c4) at (0,-8.25) {Lưu tiền tố, mask và điểm.\\Quan sát nằm trong tiền tố.\\Bản ghi cuối có thể\\chỉ chứa quyết định.};
+
+\node[replay] (r1) at (4.65,-1.35) {Đọc các tiền tố và quan sát\\từ quỹ đạo đã chốt};
+\node[replay] (r2) at (4.65,-3.45) {Forward có gradient\\Tính lại điểm quyết định\\Trộn chú ý bằng điểm đã tính};
+\node[replay] (r3) at (4.65,-5.85) {Ghép logits ở vị trí mới\\và tính LM Loss\\Cộng regularization\\\(0.05\sum_{j\in J}d_j\)};
+\node[replay] (r4) at (4.65,-8.25) {Backpropagation qua Replay\\Tìm kiếm nằm ngoài\\đồ thị gradient};
+
+\node[infer] (i1) at (9.3,-1.35) {Prefill câu hỏi\\Khởi tạo KV Cache};
+\node[infer] (i2) at (9.3,-3.45) {Forward: chỉ tính \(d_t\)\\tại prefill hoặc cuối câu.\\Truy hồi nếu \(d_t\geq\tau\)\\và truy vấn hợp lệ.};
+\node[infer] (i3) at (9.3,-5.85) {Nếu truy hồi: chèn quan sát,\\cập nhật mask và KV Cache,\\trộn chú ý theo \(d_t\).\\Nếu bỏ qua: giữ ngữ cảnh.};
+\node[infer] (i4) at (9.3,-8.25) {Sinh token tiếp theo\\Không exploration};
+
+\foreach \head/\one/\two/\three/\four in {ct/c1/c2/c3/c4,rt/r1/r2/r3/r4,it/i1/i2/i3/i4} {
+  \draw[flow] (\head) -- (\one);
+  \draw[flow] (\one) -- (\two);
+  \draw[flow] (\two) -- (\three);
+  \draw[flow] (\three) -- (\four);
+}
+\draw[flow,dashed,blue!60!black] (c4.east) -- (2.32,-8.25) |- (r1.west);
+\draw[flow,dashed,violet!65!black] (i4.east) -- (11.63,-8.25) |- (i2.east);
+\node[align=center,font=\small] at (4.65,-9.65)
+  {\(\tau=0.4297\) ở cấu hình mặc định. Collect giới hạn bốn lượt;\\
+   nhánh kiểm tra giới hạn trong inference hiện bị vô hiệu hóa.};
 \end{tikzpicture}

@@ -1,12 +1,27 @@
 \chapter{Kết luận và hướng phát triển}
 \label{chap:conclusion}
 \section{Kết luận}
-Đồ án khảo sát cách học retrieval timing từ LM Loss và retrieval regularization. H1 cho thấy LM Loss nhạy với mức trộn và thành phần bằng chứng; H2 ghi nhận tín hiệu gradient hữu ích trong một số vùng. ART dùng Decision Head, Attention Mixing khả vi và Collect--Replay để học điểm mà không cần nhãn quyết định trực tiếp hay Reinforcement Learning.
 
-Trên MuSiQue, HotpotQA và 2WikiMultiHopQA, ART tại \(\tau=0.4297\) cải thiện Acc, F1 và EM so với hai đối chứng địa phương. Trong threshold sweep, các ngưỡng cao hơn ghi nhận ít truy vấn hơn; thay đổi F1 phụ thuộc benchmark. Kết quả hệ thống và các probe bổ sung cho nhau khi đánh giá đóng góp của cơ chế học.
+Đồ án nghiên cứu phương pháp học thời điểm truy hồi thông tin thích nghi (Adaptive Retrieval Timing) thông qua việc kết hợp LM Loss và Retrieval Regularization, không yêu cầu nhãn giám sát trực tiếp cho từng quyết định truy hồi hoặc sử dụng Reinforcement Learning.
+
+Thông qua hai phép thăm dò H1 và H2, nghiên cứu khảo sát ảnh hưởng của Attention Mixing đến khả năng dự đoán token và tín hiệu gradient theo hệ số trộn. Trên cơ sở đó, hệ thống ART được xây dựng với ba thành phần chính: Decision Head, Attention Mixing khả vi và quy trình huấn luyện Collect–Replay.
+
+Kết quả thực nghiệm trên MuSiQue, HotpotQA và 2WikiMultiHopQA cho thấy hệ thống ART cải thiện các chỉ số Acc, EM và F1 so với No-RAG và Vanilla RAG trong thiết lập đánh giá được khảo sát. Đồng thời, các thí nghiệm thay đổi ngưỡng quyết định cho thấy số lần truy hồi có thể được điều chỉnh, trong khi chất lượng trả lời không biến thiên đơn điệu theo số lần truy hồi.
+
+Nhìn chung, kết quả bước đầu cho thấy tính khả thi của việc sử dụng tín hiệu từ mục tiêu mô hình ngôn ngữ để học cơ chế quyết định truy hồi, mở ra khả năng nghiên cứu sâu hơn về truy hồi thích nghi trong các hệ thống hỏi đáp nhiều bước.
 
 \section{Hạn chế}
-Các probe cấp sẵn bằng chứng và dùng teacher forcing, nên chỉ xác nhận tín hiệu trong điều kiện khảo sát. So sánh hệ thống ghép cặp cùng câu hỏi nhưng chưa có ablation kiểm soát checkpoint và prompt để tách riêng hiệu ứng timing. Retrieval count đo hành vi gọi tìm kiếm; muốn đánh giá compute cần đo thêm độ dài ngữ cảnh, số token sinh và độ trễ thực tế.
+
+Mặc dù đạt được những kết quả bước đầu, nghiên cứu vẫn tồn tại một số hạn chế. Thứ nhất, các phép thăm dò H1 và H2 sử dụng tài liệu được cung cấp sẵn và đánh giá dưới chế độ teacher forcing, do đó chưa phản ánh đầy đủ hành vi của hệ thống trong quá trình sinh tự hồi quy.
+
+Thứ hai, ART sử dụng checkpoint đã fine-tune, trong khi các phương pháp đối chứng sử dụng checkpoint gốc. Vì vậy, kết quả hiện tại chưa cho phép tách biệt hoàn toàn đóng góp của cơ chế lựa chọn thời điểm truy hồi khỏi ảnh hưởng của quá trình fine-tuning và các khác biệt trong thiết lập đánh giá.
+
+Cuối cùng, nghiên cứu chủ yếu sử dụng số lần truy hồi để phản ánh mức độ sử dụng công cụ tìm kiếm, chưa đánh giá trực tiếp chi phí tính toán và độ trễ thực tế của toàn bộ hệ thống.
 
 \section{Hướng phát triển}
-Có thể kiểm tra thêm bằng ngưỡng chọn trên tập xác thực và ablation giữ checkpoint cố định. Hai hướng Đồ án tốt nghiệp là khảo sát \emph{tool selection} theo trạng thái suy luận và huấn luyện chung retriever--generator để kiểm tra ảnh hưởng của tín hiệu sinh lên chất lượng bằng chứng.
+
+Trong các nghiên cứu tiếp theo, hệ thống có thể được đánh giá thông qua các thí nghiệm ablation nhằm xác định rõ hơn đóng góp của từng thành phần, đồng thời bổ sung các phép đo chi phí tính toán và độ trễ thực tế.
+
+Đối với giai đoạn Đồ án tốt nghiệp, hai hướng nghiên cứu tiềm năng được xem xét. Hướng thứ nhất là mở rộng cơ chế quyết định từ thời điểm truy hồi sang lựa chọn công cụ (Tool Selection) dựa trên trạng thái suy luận của mô hình. Hướng thứ hai là khảo sát khả năng huấn luyện phối hợp Retriever–Generator, nhằm nghiên cứu tác động của tín hiệu từ mô hình sinh đối với quá trình lựa chọn và truy hồi bằng chứng.
+
+Hai hướng này hiện được xem là những định hướng nghiên cứu cần tiếp tục đánh giá tính khả thi, thay vì các cải tiến đã được xác nhận về hiệu quả.

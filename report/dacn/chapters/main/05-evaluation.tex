@@ -2,20 +2,47 @@
 \label{chap:evaluation}
 \section{Thiết lập thực nghiệm}
 \subsection{Hai phép thăm dò cơ chế}
-Hai phép thăm dò dùng Attention Mixing Probe, một Decoder Qwen2.5 nhận document mask và hệ số trộn trực tiếp. Tài liệu cấp sẵn tách phép đo chú ý khỏi Decision Head và vòng truy hồi tự hồi quy. Dữ liệu thăm dò đến từ các tập xác thực 2, 3 và 4 bước của MuSiQue. Tiêu chí hỗ trợ dựa trên nhãn đoạn của bộ dữ liệu. Nhóm đoạn được lấy mẫu một lần theo câu hỏi với bộ sinh số ngẫu nhiên seed 42. H1 dùng chế độ suy luận để tính mất mát trên token đích. H2 dùng hook trên hệ số đầu vào để ghi gradient, với tốc độ học bằng không và tham số mô hình đóng băng. Các phép thăm dò sử dụng cùng lưới 33 mức \(d=i/32\). Các tỷ lệ 0:3, 1:2, 2:1 và 3:0 chỉ số đoạn hỗ trợ và gây nhiễu, mỗi nhóm gồm ba đoạn. Các đường tổng hợp gộp theo mẫu; nhóm 3:0 có 494 mẫu, các nhóm còn lại có 1\,024 mẫu. Điều kiện 2 bước, 3:0 thiếu vì không đủ đoạn hỗ trợ. So sánh giữa các điều kiện phải xét thành phần mẫu và thông tin cung cấp sẵn.
+Để kiểm chứng hai giả thuyết H1 và H2, chúng tôi sử dụng Attention Mixing Probe, một phiên bản Decoder Qwen2.5 cho phép cung cấp trực tiếp tài liệu và hệ số trộn chú ý \(d\). Việc sử dụng tài liệu có sẵn giúp khảo sát riêng tác động của Attention Mixing, không phụ thuộc vào Decision Head hoặc quá trình truy hồi tự hồi quy.
+
+Dữ liệu thí nghiệm được xây dựng từ các tập xác thực MuSiQue với câu hỏi yêu cầu 2, 3 và 4 bước suy luận. Dựa trên nhãn đoạn hỗ trợ của bộ dữ liệu, mỗi mẫu được cung cấp ba đoạn văn theo bốn cấu hình: 0:3, 1:2, 2:1 và 3:0, tương ứng với số đoạn hỗ trợ và đoạn gây nhiễu. Các đoạn được lấy mẫu một lần cho mỗi câu hỏi với seed 42 và được giữ cố định khi thay đổi hệ số trộn. Cả hai phép thăm dò đều khảo sát 33 giá trị \(d=i/32\), với \(i=0,\ldots,32\).
+
+Đối với H1, mô hình được chạy ở chế độ suy luận để đo LM Loss trên các token đích tại từng giá trị \(d\). Đối với H2, các tham số mô hình được đóng băng và gradient của LM Loss theo hệ số \(d\) được ghi nhận thông qua hook, không thực hiện cập nhật tham số (learning rate bằng 0). Kết quả được tổng hợp trên 1.024 mẫu đối với các cấu hình 0:3, 1:2 và 2:1; riêng cấu hình 3:0 có 494 mẫu do điều kiện 2 bước không đủ ba đoạn hỗ trợ. Vì vậy, khi so sánh kết quả giữa các cấu hình, cần lưu ý sự khác biệt về thành phần mẫu và lượng thông tin hỗ trợ được cung cấp.
+
 \subsection{Đối chứng hệ thống}
-Mỗi bộ có 500 mẫu. Bản ghi ba hệ thống khớp theo thứ tự ID, câu hỏi và toàn bộ đáp án chấp nhận. No-RAG sinh từ câu hỏi; Vanilla RAG truy hồi một lần bằng câu hỏi, giữ năm đoạn; ART truy vấn trong khi sinh và lấy năm đoạn mỗi lượt ở cấu hình mặc định. Mã thiết lập seed 44 và cùng họ Qwen2.5-3B-Instruct. Hai đối chứng dùng checkpoint gốc, ART dùng bản tinh chỉnh. Đối chiếu kết quả truy hồi cho các truy vấn trùng nhau cho thấy năm tiêu đề đầu cùng thứ tự trên cả ba bộ; phiên bản chỉ mục lịch sử chưa được ghim.
-Hai baseline dùng prompt tương ứng theo mẫu R-Search; ART dùng prompt riêng. Trình chấm đối chứng loại token điều khiển rồi chấm phần sinh. ART lấy khối trả lời hoàn chỉnh cuối cùng hoặc dùng nguyên phần sinh đã tỉa khoảng trắng khi không có khối. Ba hàm chấm địa phương dùng cùng quy tắc so khớp với mã evaluator R-Search. Bài báo R-Search nêu EM và F1 là chỉ số QA chính\cite{rsearch}. Acc đo tỷ lệ mẫu có ít nhất một ground-truth alias xuất hiện dưới dạng chuỗi con, không phân biệt hoa thường. EM lấy khớp chính xác tốt nhất sau chuẩn hóa; F1 lấy F1 token đa tập tốt nhất theo các đáp án chấp nhận. Chuẩn hóa chuyển chữ thường, bỏ dấu câu ASCII và mạo từ tiếng Anh, rồi gộp khoảng trắng. Kết quả là trung bình mẫu trên thang phần trăm.
+Để đánh giá hiệu quả của hệ thống ART, chúng tôi tiến hành thực nghiệm trên ba bộ dữ liệu MuSiQue, HotpotQA và 2WikiMultiHopQA, mỗi bộ gồm 500 mẫu. Ba phương pháp được đánh giá trên cùng tập câu hỏi và đáp án tham chiếu nhằm bảo đảm tính nhất quán trong quá trình so sánh.
+
+Các phương pháp đối chứng bao gồm:
+
+\begin{itemize}
+\item \textbf{No-RAG:} Mô hình sinh câu trả lời trực tiếp từ câu hỏi mà không sử dụng tài liệu truy hồi.
+\item \textbf{Vanilla RAG:} Mô hình truy hồi một lần dựa trên câu hỏi ban đầu, sử dụng 5 đoạn văn liên quan để hỗ trợ sinh câu trả lời.
+\item \textbf{ART:} Hệ thống quyết định thời điểm truy hồi trong quá trình sinh, với 5 đoạn văn được lấy ở mỗi lượt truy hồi.
+\end{itemize}
+Cả ba phương pháp đều sử dụng kiến trúc nền Qwen2.5-3B-Instruct. Tuy nhiên, No-RAG và Vanilla RAG sử dụng checkpoint gốc, trong khi ART sử dụng checkpoint đã fine-tune. Vì vậy, kết quả so sánh phản ánh hiệu quả tổng thể của hệ thống ART, bao gồm cả quá trình fine-tuning và cơ chế truy hồi thích nghi, thay vì chỉ đo lường riêng tác động của việc lựa chọn thời điểm truy hồi.
+
+Hiệu quả trả lời câu hỏi được đánh giá thông qua ba chỉ số Accuracy (Acc), Exact Match (EM) và token-level F1, sử dụng quy tắc chuẩn hóa và so khớp đáp án theo bộ đánh giá R-Search. Kết quả được tính trung bình trên toàn bộ mẫu và biểu diễn dưới dạng phần trăm.
+
+Trong evaluator, Acc đo tỷ lệ dự đoán chứa ít nhất một đáp án tham chiếu dưới dạng chuỗi con, không phân biệt hoa thường. EM và F1 so khớp sau chuẩn hóa. Các quy tắc này khớp với mã đánh giá R-Search\cite{rsearch}.
+
 \section{Kết quả}
 \subsection{Kiểm chứng H1 và H2}
-\textbf{H1.} Thay đổi Attention Mixing làm thay đổi LM Loss theo thành phần bằng chứng. Kết quả cho thấy ở hai đầu lưới, mất mát nhóm 3:0 giảm từ \(1.2875\) xuống \(0.8940\), còn nhóm 0:3 tăng từ \(1.3160\) lên \(1.3943\). \Cref{fig:h1} cho thấy các cực tiểu bên trong và xu hướng khác nhau giữa tỷ lệ. Kết quả ủng hộ ảnh hưởng của bằng chứng đối với xác suất đích; phép đo không trực tiếp phản ánh chất lượng sinh tự do.
+\textbf{H1.} \Cref{fig:h1} cho thấy LM Loss thay đổi theo hệ số trộn \(d\) và tỷ lệ tài liệu hỗ trợ so với tài liệu gây nhiễu. Khi cả ba tài liệu đều gây nhiễu (0:3), tăng \(d\) ban đầu chỉ làm LM Loss giảm nhẹ từ 1.3160 tại \(d=0\) xuống 1.2753 tại \(d=0.25\). Sau đó, LM Loss tăng lên 1.3943 tại \(d=1\). Khi có tài liệu hỗ trợ, LM Loss giảm rõ hơn. Các giá trị thấp nhất quan sát được với tỷ lệ 1:2, 2:1 và 3:0 lần lượt là 1.1295, 0.9495 và 0.8830, tại \(d\) xấp xỉ 0.656, 0.719 và 0.750.
+
+Hiệu quả của Attention Mixing phụ thuộc vào thành phần bằng chứng. Tài liệu hỗ trợ có thể giúp giảm LM Loss, trong khi tài liệu gây nhiễu hạn chế lợi ích đó. Cả bốn đường đều tăng trở lại khi \(d\) tiến đến 1, cho thấy sử dụng tối đa thông tin truy hồi không nhất thiết có lợi nhất trong thí nghiệm. LM Loss được đo dưới teacher forcing nên chưa trực tiếp cho biết chất lượng câu trả lời khi mô hình sinh tự do. Ngoài ra, điều kiện 3:0 thiếu dữ liệu hai bước, nên cần thận trọng khi so sánh với các nhóm còn lại.
 \begin{figure}[htbp]\centering
 \includegraphics[width=.86\linewidth]{graphics/h1.pdf}
 \caption{H1: mất mát trung bình trên đích theo hệ số trộn ép và tỷ lệ hỗ trợ:gây nhiễu. Nguồn: tổng hợp H1 của đề tài.}
 \label{fig:h1}
 \end{figure}
 
-\textbf{H2.} Gradient theo mixing coefficient có thể cung cấp hướng học cục bộ. Kết quả cho thấy đường toàn đoạn gây nhiễu có đỉnh dương ở \(d=0.375\), còn ba điều kiện có hỗ trợ có đáy âm ở \(d=0.4375\). Hai đặc trưng này gợi ý xem xét khoảng \(d=0.40\)--\(0.44\). Đường toàn nhiễu cũng đổi dấu trong lân cận này, và tại \(d=1\) cả bốn gradient đều dương. Do đó tín hiệu cục bộ phụ thuộc hệ số và thành phần bằng chứng. \Cref{fig:h2,fig:h2cost} lấy từ notebook H2 giản lược. Mặt cắt chi phí xét \(g(d)+\lambda\) bằng cách đặt đường ngang tại \(-\lambda\), với \(\lambda=0,0.05,0.1\). Giao điểm minh họa cách độ dốc đổi dấu trên miền quan sát phía trên ngưỡng; chúng không phải kết quả tìm ngưỡng tối ưu. ART chọn \(\tau=0.4297\) làm ngưỡng vận hành theo kinh nghiệm. \(d\) trên hình là hệ số ép của thí nghiệm, còn \(\tau\) so với \(s_t\) trong sinh tự do.
+\pagebreak[4]
+\textbf{H2.} \Cref{fig:h2,fig:h2cost} khảo sát gradient của LM Loss theo hệ số trộn \(d\). Gradient âm cho biết tăng nhẹ \(d\) có xu hướng làm giảm LM Loss tại điểm đang xét. Gradient dương cho biết tăng nhẹ \(d\) có xu hướng làm tăng LM Loss. Như vậy, độ dốc cung cấp tín hiệu cục bộ để mô hình học cách điều chỉnh mức sử dụng thông tin truy hồi.
+
+Điều kiện chỉ chứa tài liệu gây nhiễu (0:3) có gradient dương lớn nhất tại \(d=0.375\), còn ba điều kiện có tài liệu hỗ trợ đạt gradient âm nhỏ nhất tại \(d=0.4375\). Sự khác biệt này gợi ý khảo sát vùng \(d\) khoảng 0.40--0.44, nơi tín hiệu gradient có thể phản ánh sự khác nhau giữa bằng chứng hỗ trợ và bằng chứng gây nhiễu. Gradient thay đổi theo \(d\), và tại \(d=1\) cả bốn điều kiện đều có gradient dương. Do đó, kết quả chưa cho thấy một giá trị \(d\) cố định phù hợp với mọi trường hợp.
+
+Để khảo sát ảnh hưởng của chi phí truy hồi, \cref{fig:h2cost} minh họa điều kiện \(g(d)+\lambda=0\) qua các đường tham chiếu \(-\lambda\), với \(\lambda\) lần lượt bằng \(0\), \(0.05\) và \(0.1\). Các giao điểm cho biết những vị trí mà độ dốc của hàm mục tiêu có thể đổi dấu trong miền khảo sát. Chúng không xác định trực tiếp ngưỡng truy hồi tối ưu.
+
+Trong thí nghiệm H1--H2, \(d\) là hệ số trộn được đặt trước. Khi mô hình sinh tự do, \(d_t\) là đầu ra của Decision Head. ART dùng ngưỡng vận hành \(\tau=0.4297\) theo kinh nghiệm để so sánh với \(d_t\). Các đồ thị H1--H2 không chứng minh đây là ngưỡng tối ưu.
 \begin{figure}[htbp]\centering
 \includegraphics[width=.86\linewidth]{graphics/h2-gradient.pdf}
 \caption{H2: gradient mất mát trung bình theo \(d\). Vạch đứng chỉ ngưỡng vận hành \(\tau\) để tham chiếu. Nguồn: notebook H2, ô vẽ đường gradient.}
@@ -33,27 +60,23 @@ Hai baseline dùng prompt tương ứng theo mẫu R-Search; ART dùng prompt ri
 \Cref{tab:sweep,fig:tradeoff} tóm tắt các cấu hình có ngưỡng xác định.
 \input{graphics/sweep-table.tex}
 
-Retrieval count là độ dài danh sách truy vấn trên từng mẫu đã hoàn tất, giữ cả truy vấn lặp. Mã ghi truy vấn ngay trước lời gọi tìm kiếm; log thiếu trạng thái thành công từng lần. Đại lượng này phản ánh hành vi retrieval. Tổng compute còn phụ thuộc vào embedding, tìm kiếm, độ dài ngữ cảnh và generation. Trong các lần chạy đã lưu, ngưỡng cao hơn luôn giảm số truy vấn trung bình. F1 không giảm đều: MuSiQue ở \(0.60\) tăng \(0.91\) điểm và giảm \(2.204\) truy vấn/mẫu, còn HotpotQA ở \(0.50\) tăng \(1.44\) điểm và giảm \(0.904\) truy vấn/mẫu. Trên 2WikiMultiHopQA, hai ngưỡng cao hơn đều giảm F1 so với mặc định.
-F1 cao nhất quan sát được là 32.08 tại \(0.60\) (MuSiQue), 49.68 tại \(0.50\) (HotpotQA) và 46.30 tại \(0.4297\) (2WikiMultiHopQA). Các ngưỡng được nhận diện trên chính dữ liệu kiểm thử và chỉ dùng cho sensitivity analysis. So sánh chính dùng chung \(\tau=0.4297\).
+Retrieval count là số truy vấn ghi nhận trên mỗi mẫu hoàn tất, tính cả truy vấn lặp. Trên cả ba benchmark, số lượt trung bình giảm khi tăng \(\tau\) trong các cấu hình đã khảo sát. F1 giảm liên tiếp trên 2WikiMultiHopQA, tăng rồi giảm trên HotpotQA, và giảm, phục hồi rồi giảm lại trên MuSiQue. Chẳng hạn, MuSiQue ở ngưỡng \(0.60\) có 2.588 truy vấn trung bình và F1 32.08, so với 4.792 truy vấn và F1 31.17 ở cấu hình chuẩn. Ít truy vấn hơn có thể đi kèm F1 cao hơn hoặc thấp hơn tùy cấu hình. Số truy vấn phản ánh mức sử dụng truy hồi; các lượt chạy này không đo latency, FLOPs hay tổng compute.
 
-Cấu hình không bị trội khi không có cấu hình nào khác vừa đạt F1 cao hơn hoặc bằng vừa dùng ít truy vấn hơn hoặc bằng, với ít nhất một bất đẳng thức nghiêm. Biên quan sát gồm MuSiQue \(0.60,0.70\), HotpotQA \(0.50,0.60\), và ba điểm 2WikiMultiHopQA. Kết quả này mô tả riêng lưới đã thử.
 \begin{figure}[htbp]\centering
 \includegraphics[width=\linewidth]{graphics/tradeoff.pdf}
-\caption{F1 và số truy vấn trung bình trên các cấu hình có ngưỡng xác định. Vòng tròn rỗng đánh dấu các điểm không bị trội trong từng bộ.}
+\caption{F1 và số truy vấn trung bình trên các cấu hình có ngưỡng xác định. Các nhãn điểm là ngưỡng quyết định.}
 \label{fig:tradeoff}
 \end{figure}
 \clearpage
 \section{Thảo luận}
 \subsection{Ví dụ đối sánh trên MuSiQue}
-Dùng lại MuSiQue ID 27 từ \cref{fig:baseline-case}. Dưới đây là câu hỏi, ground truth và toàn bộ raw outputs. Dấu điều khiển được giữ nguyên trong trích dẫn.
+Ví dụ MuSiQue ID 348 ở \cref{fig:baseline-case} có EM bằng 0 với No-RAG và Vanilla RAG, và bằng 1 với ART. Đáp án của ART là \emph{Snapper Foster}. Phụ lục~\ref{app:examples} lưu nguyên văn các đầu ra và đoạn truy hồi.
 
-\begin{quote}\SingleSpacing
-\input{graphics/case-outputs.tex}
-\end{quote}
-
-Hai đối chứng có EM bằng 0; ART có EM bằng 1 sau khi lấy nội dung thẻ trả lời. Lượt đầu của ART chứa đoạn xác định Bindi Irwin là diễn viên đóng Nim. Lượt hai dùng tên Bindi Irwin trong truy vấn và trả đoạn xác nhận cha cô là Steve Irwin. Raw output viện dẫn \emph{My Steve}, nhưng bản đoạn đã lưu không nêu quan hệ cha--con; bằng chứng trực tiếp nằm trong các đoạn khác cùng lượt. Phụ lục~\ref{app:examples} ghi nguyên văn trace và đoạn trích. Mẫu minh họa cách truy vấn thay đổi khi có thực thể trung gian.
+Ở lượt đầu, đoạn \emph{Michael Knight (Knight Rider)} xác định David Hasselhoff là diễn viên. Lượt sau đưa tên David Hasselhoff vào truy vấn và trả về đoạn \emph{Snapper Foster}, nơi ghi rõ ông từng đóng vai này. Vanilla RAG có bằng chứng cho quan hệ đầu tiên trong năm đoạn đã lưu, nhưng thiếu đoạn xác nhận vai diễn. Chuỗi quan sát minh họa cách truy vấn được cập nhật theo thông tin đã tìm thấy. So sánh hệ thống này chưa cô lập ảnh hưởng của retrieval timing.
 
 \subsection{So sánh cơ chế}
-Trong \cref{tab:signals}, IRCoT tạo cơ hội truy hồi theo bước suy luận, Self-RAG học reflection token từ tín hiệu giám sát và R-Search dùng reward để tối ưu quỹ đạo tìm kiếm. ART đưa retrieval regularization vào mục tiêu cùng LM Loss và nhận gradient gián tiếp qua Attention Mixing trên quỹ đạo đã thu thập. Thiết kế này tránh thu thập nhãn trực tiếp cho từng quyết định và tránh tối ưu chính sách bằng Reinforcement Learning. Chi phí tạo đích giáo viên và chạy Collect--Replay vẫn là một phần của training.
+Các phương pháp IRCoT, Self-RAG và R-Search\cite{ircot,selfrag,rsearch} tiếp cận bài toán truy hồi thích nghi theo những cơ chế khác nhau. IRCoT kết hợp truy hồi với các bước suy luận trung gian; Self-RAG sử dụng các reflection tokens được học từ tín hiệu giám sát để điều khiển truy hồi; trong khi R-Search tối ưu quá trình tìm kiếm thông qua tín hiệu phần thưởng.
 
-Đối chiếu địa phương đo hệ thống đầy đủ trên cùng mẫu. Hiệu ứng riêng của timing cần ablation giữ checkpoint và giao thức tương thích. Kết quả công bố của R-Search\cite{rsearch} dùng giao thức riêng, gồm dữ liệu huấn luyện 2WikiMultiHopQA, nên không dùng làm đối chứng có kiểm soát cho ART. Phụ lục~\ref{app:repro} mô tả phạm vi của phép đếm workload.
+Khác với các phương pháp trên, ART kết hợp LM Loss với Retrieval Regularization trong cùng mục tiêu huấn luyện. Thông qua Attention Mixing, tín hiệu gradient từ quá trình dự đoán token có thể tác động gián tiếp đến Decision Head, giúp mô hình học cách điều chỉnh quyết định truy hồi mà không cần nhãn trực tiếp cho từng thời điểm truy hồi hoặc tối ưu chính sách bằng Reinforcement Learning. Tuy nhiên, ART vẫn sử dụng dữ liệu đích do teacher model tạo ra và quá trình Collect–Replay để tổ chức huấn luyện.
+
+Kết quả thực nghiệm cho thấy hiệu quả của hệ thống ART hoàn chỉnh trên các bộ dữ liệu được khảo sát. Tuy nhiên, do ART sử dụng checkpoint đã fine-tune, trong khi các baseline sử dụng checkpoint gốc, kết quả hiện tại chưa tách biệt được đóng góp riêng của cơ chế lựa chọn thời điểm truy hồi. Để đánh giá riêng tác động này, cần thực hiện thêm các thí nghiệm ablation với checkpoint và điều kiện đánh giá tương thích.

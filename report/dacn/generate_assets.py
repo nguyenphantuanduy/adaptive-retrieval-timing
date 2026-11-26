@@ -102,8 +102,6 @@ def benchmarks():
                           f"{row['retrieval_rate_percent']:.1f}", row["total_queries"]])
             x, y = row["average_queries"], row["metrics"]["F1"]
             ax.scatter(x, y, color="#206897", zorder=2)
-            if row["pareto_efficient_within_threshold_sweep"]:
-                ax.scatter(x, y, facecolors="none", edgecolors="#206897", s=110, zorder=2)
             ax.annotate(f"{tau:g}", (x, y), xytext=(4, 5), textcoords="offset points", fontsize=8)
         ax.set_title(title)
         ax.set_xlabel("Truy vấn/mẫu")
